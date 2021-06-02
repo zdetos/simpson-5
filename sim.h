@@ -76,7 +76,7 @@ typedef struct _Mixing {
 
 typedef struct _Gtensor {
 	int nuc;
-	double iso, delta, eta, pas[3];
+	double iso, delta, eta, pas[3], Larmor_frequency;
 	mat_double *T;
 	complx *Rmol;
 	mat_double *T2q[5];
@@ -202,9 +202,7 @@ typedef struct _Sim_wsp {
     int thread_id, cryst_idx, ig, rf_idx;
     int *FWTASG_irow, *FWTASG_icol;
     double dw;
-    // labframe
-    mat_complx *Hlab, *Hrflab;
-    // complex blockdiagonalized Hamiltonian
+    // complex, possibly blockdiagonalized, Hamiltonian; for LABframe and DNPframe
     blk_mat_complx *Hcplx, *Hrf_blk;
 } Sim_wsp;
 

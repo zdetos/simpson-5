@@ -795,9 +795,7 @@ void _delay_simple(Sim_info *sim, Sim_wsp *wsp, double duration)
 	if (sim->wr < TINY) {
 		/* static case */
 		ham_hamilton(sim,wsp);
-		if (sim->frame == LABFRAME) {
-			blk_prop_complx(wsp->dU,wsp->Hlab,duration*1e-6,sim);
-		} else if (wsp->Hcplx != NULL) {
+		if ( (sim->frame == LABFRAME) || (sim->frame == DNPFRAME) ) {
 			blk_prop_complx_3(wsp->dU,wsp->Hcplx,duration*1e-6,sim);
 		} else {
 			blk_prop_real(wsp->dU,wsp->ham_blk,duration*1e-6,sim);
@@ -824,9 +822,7 @@ void _delay_simple(Sim_info *sim, Sim_wsp *wsp, double duration)
 				//printf("STEP %i, time %f, ",i,wsp->t);
 				//blk_dm_print(wsp->ham_blk," Ham");
 				//if (i==1) {
-				if (sim->frame == LABFRAME) {
-					blk_prop_complx(wsp->dU,wsp->Hlab,dt,sim);
-				} else if (wsp->Hcplx != NULL) {
+				if ( (sim->frame == LABFRAME) || (sim->frame == DNPFRAME) ) {
 					blk_prop_complx_3(wsp->dU,wsp->Hcplx,dt,sim);
 				} else {
 					blk_prop_real(wsp->dU, wsp->ham_blk, dt, sim);
@@ -932,19 +928,86 @@ int _setrfprop(Sim_info *sim, Sim_wsp *wsp)
   wsp->spinused = NULL;
 
   //blk_dm_print(wsp->sumHrf,"_setrfprop sumHrf");
-  if (sim->frame == LABFRAME) {
-	  assert(wsp->sumHrf->Nblocks == 1);
-	  dm_copy2cm(wsp->sumHrf->m, wsp->Hrflab);
-	  simtrans_zrot2(wsp->Hrflab, wsp->sumUph);
-  }
-  if (sim->frame == DNPFRAME) {
-	  if (wsp->Hrf_blk != NULL) free_blk_mat_complx(wsp->Hrf_blk);
-	  wsp->Hrf_blk = ham_rf(wsp);
-  }
-
   return isany;
 }
 
+/* creates the irradiation Hamiltonian for LABframe and DNPframe every maxdt
+ * result is in wsp->Hrf_blk
+ ******/
+int _setrfprop_labdnp(Sim_info *sim, Sim_wsp *wsp)
+{
+  int i,j,spin,isany1, isany2;
+  double w1, wrf;
+
+  assert(wsp->Hrf_blk != NULL);
+  assert(wsp->Hrf_blk->Nblocks == 1); // assume no blockdiagonalization in the current implementation
+
+  isany1 = 0;
+  isany2 = 0;
+  blk_cm_zero(wsp->Hrf_blk);
+  blk_dm_zero(wsp->sumHrf);
+  dm_zero(wsp->sumUph);
+
+  for (i=1; i<=sim->ss->nchan; i++) {
+    if (fabs(wsp->rfv[i]) > TINY) {
+      if (wsp->isselectivepulse) {
+    	if (sim->frame == DNPFRAME) {
+    	  if (sim->ss->iso[spin]->number == 0) { // it is electron
+    	    for (j=1; j<=sim->ss->nchanelem[i]; j++) {
+    	      spin = sim->ss->chan[i][j];
+              if (wsp->spinused[spin]) {
+    			cm_multocr(wsp->Hrf_blk->m, wsp->Ix[spin], Complx(wsp->rfv[i],0));
+    			if (fabs(wsp->phv[i]) > TINY) {
+    			  dm_multod(wsp->sumUph, wsp->Iz[spin], wsp->phv[i]);
+    			}
+    			isany1++;
+    		  }
+    		}
+  		    //make the rotation for all elements in this channel
+    	    if (fabs(wsp->phv[i]) > TINY) blk_simtrans_zrot2(wsp->Hrf_blk,wsp->sumUph);
+    		continue; // continue with other channel
+    	  }
+        }
+    	// do other channels as lab frame. Electron in DNPframe should not get here
+	    for (j=1; j<=sim->ss->nchanelem[i]; j++) {
+	      spin = sim->ss->chan[i][j];
+          if (wsp->spinused[spin]) {
+        	wrf = sim->ss->chanfreq[i]*2*M_PI;
+        	if (wsp->offset != NULL) wrf += wsp->offset[i];  // rf frequency with offset
+        	w1 = 2.0*wsp->rfv[i]*cos(wrf*wsp->t + wsp->phv[i]); // amplitude in front of Ix
+        	blk_dm_multod_extract(wsp->sumHrf, wsp->Ix[spin], w1);
+			isany2++;
+		  }
+	    }
+    	// end of selective
+      } else {
+        if (sim->frame == DNPFRAME) {
+          if (sim->ss->iso[sim->ss->chan[i][1]]->number == 0) { // it is electron channel
+    	    cm_multocr(wsp->Hrf_blk->m, wsp->chan_Ix[i], Complx(wsp->rfv[i],0));
+    	    if (fabs(wsp->phv[i]) > TINY) {
+    		  dm_multod(wsp->sumUph, wsp->chan_Iz[i], wsp->phv[i]);
+    		  //make the rotation
+    		  blk_simtrans_zrot2(wsp->Hrf_blk,wsp->sumUph);
+    	    }
+    	    isany1++;
+    	    continue; // continue with other channel
+          }
+        }
+        // do labframe stuff for all channels. Electron in DNPframe should not get here
+        wrf = sim->ss->chanfreq[i]*2*M_PI;
+        if (wsp->offset != NULL) wrf += wsp->offset[i];  // rf frequency with offset
+        w1 = 2.0*wsp->rfv[i]*cos(wrf*wsp->t + wsp->phv[i]); // amplitude in front of Ix
+        blk_dm_multod_extract(wsp->sumHrf, wsp->chan_Ix[i], w1);
+        isany2++;
+      }
+    }
+  }
+  if (isany2) { // add real block matrix wsp->sumHrf to complex block matrix wsp->Hrf_blk
+	  blk_cm_multocr(wsp->Hrf_blk,wsp->sumHrf,Cunit);
+  }
+
+  return isany1+isany2;
+}
 
 void _pulse_simple(Sim_info *sim, Sim_wsp *wsp, double duration)
 {
@@ -965,11 +1028,9 @@ void _pulse_simple(Sim_info *sim, Sim_wsp *wsp, double duration)
 		ham_hamilton(sim,wsp);
 		//blk_dm_print(wsp->ham_blk,"_pulse HAM_int");
 		//blk_dm_print(wsp->sumHrf,"_pulse HAM_rf");
-		if (sim->frame == LABFRAME) {
-			cm_multod(wsp->Hlab,wsp->Hrflab,1.0);
-			blk_prop_complx(wsp->dU,wsp->Hlab,dt,sim);
-		} else if (sim->frame == DNPFRAME) {
+		if ( (sim->frame == LABFRAME) || (sim->frame == DNPFRAME) ) {
 			//blk_cm_print(wsp->Hcplx,"Hamilton interactions");
+			_setrfprop_labdnp(sim, wsp);  // it needs to be called here as the pulse parameters are changing every maxdt (wsp->dtmax)
 			blk_cm_multod(wsp->Hcplx,wsp->Hrf_blk,1.0);
 			//blk_cm_print(wsp->Hrf_blk,"Hamilton pulse");
 			//blk_cm_print(wsp->Hcplx,"Ham total");
@@ -1010,14 +1071,16 @@ void _pulse(Sim_info *sim, Sim_wsp *wsp, double duration)
 	if (duration > wsp->dt_gcompute) {
 		duration = wsp->dt_gcompute;
 	}
-	if (!_setrfprop(sim,wsp)) {
-		/* ZT: relaxation? */
-		if (sim->relax) {
-			_delay_relax(sim,wsp,duration);
-		} else {
-			_delay(sim,wsp,duration);
+	if (sim->frame == ROTFRAME) { // evaluate setrfprop here, pulse parameters are constant, Hamiltonian can be time dependent due to MAS
+		if (!_setrfprop(sim,wsp)) {
+			/* ZT: relaxation? */
+			if (sim->relax) {
+				_delay_relax(sim,wsp,duration);
+			} else {
+				_delay(sim,wsp,duration);
+			}
+			return;
 		}
-		return;
 	}
 
 	if (wsp->evalmode == EM_ACQBLOCK) {
@@ -1067,10 +1130,15 @@ void _pulse(Sim_info *sim, Sim_wsp *wsp, double duration)
 
 void _pulseid(Sim_info *sim, Sim_wsp *wsp, double duration)
 {
-  if (!_setrfprop(sim,wsp)) {
-    /* no delay if there is no rf-pulses */
-    return;
-  }
+	if (sim->frame != ROTFRAME) {
+		fprintf(stderr,"Error: pulseid not implemented for frame %d (checkpoint in _pulseid)\n",sim->frame);
+		exit(1);
+	}
+
+	if (!_setrfprop(sim,wsp)) {
+		/* no delay if there is no rf-pulses */
+		return;
+	}
 
   /****** replaced, Uisunit is tested inside update_propagator *************
   if (wsp->Uisunit) {

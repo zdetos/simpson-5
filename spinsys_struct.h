@@ -29,6 +29,7 @@ typedef struct _SpinSys {
   int nchanelem[MAXCHAN+1];
   char channames[MAXCHAN+1][8];
   int nchan;
+  double chanfreq[MAXCHAN+1];
 } SpinSys;
 
 #endif /* SPINSYS_STRUCT_H_ */

@@ -730,6 +730,7 @@ void ham_rotate(Sim_info *s, Sim_wsp *wsp)
 			  wig2rot(wsp->DD_Rrot[s->MIX[i]->idx],wsp->DD[s->MIX[i]->idx]->Rmol,d2);
 		  }
 	  }
+	  // NOTE 30.5.2021 - Hassembly is disabled in DNPframe where hyperfine is used, so these lined can be obsolete
 	  // I do this because I need Rrot for terms T2+-1 that are not included in HQ[]
 	  for (i=0; i<s->nHF; i++) {
 		  if (wsp->HF_Rrot[i] != NULL) wig2rot(wsp->HF_Rrot[i],wsp->HF[i]->Rmol,d2);
@@ -760,20 +761,22 @@ void ham_rotate(Sim_info *s, Sim_wsp *wsp)
   }
 }
 
-
-void ham_hamilton_labframe(Sim_info *s, Sim_wsp *wsp)
+/* Spatial rotation ROT->LAB. In LABframe, include everything.
+ * This is called also by ham_hamilton_dnpframe() to create nuclear laboratory frame Hamiltonians
+   Populate with anisotropic parts of interactions.
+ */
+void ham_hamilton_labframe(Sim_info *s, Sim_wsp *wsp, mat_complx *d2)
 {
 	int i, q, sgn;
-	mat_complx *d2 = wigner2(s->wr*wsp->t*1.0e-6*RAD2DEG+wsp->gamma_add,wsp->brl,0.0);
-    mat_complx *ham =  wsp->Hlab;
+	mat_complx *ham;
 
-    cm_zero(ham);
-    assert(wsp->Hiso->Nblocks == 1);
-    cm_multocr(ham,wsp->Hiso->m,Complx(1.0,0));
-    if (wsp->Nint_off) {
-  	  assert(wsp->Hiso_off);
-      cm_multocr(ham,wsp->Hiso_off->m,Complx(-1.0,0));
-    }
+	// wsp->ham_blk is populated with offsets and isotropic parts in ham_hamilton()
+	if (wsp->Hcplx == NULL) {
+		wsp->Hcplx = create_blk_mat_complx_copy2(wsp->ham_blk);
+	}
+	blk_cm_zero(wsp->Hcplx);
+	assert(wsp->Hcplx->Nblocks == 1);
+    ham =  wsp->Hcplx->m;
 
 	for (i=0; i<s->nCS; i++) {
 		if (!wsp->CS_used[i] || wsp->CS_Rrot[i] == NULL) continue;
@@ -819,57 +822,82 @@ void ham_hamilton_labframe(Sim_info *s, Sim_wsp *wsp)
 			sgn *= -1;
 		}
 	}
-	for (i=0; i<s->nG; i++) {
-		fprintf(stderr,"Error: Gtensor not implemented in labframe");
-		exit(1);
-	}
-	for (i=0; i<s->nHF; i++) {
-		fprintf(stderr,"Error: Hyperfine not implemented in labframe");
-		exit(1);
+	if (s->frame != DNPFRAME) { // this function is called by ham_hamilton_dnpframe to prepare nuclear interactions.
+		// For LABFRAME we include full forms also for electrons
+		for (i=0; i<s->nG; i++) {
+			fprintf(stderr,"Error: Gtensor not yet implemented in LABframe");
+			exit(1);
+		}
+		for (i=0; i<s->nHF; i++) {
+			fprintf(stderr,"Error: Hyperfine not yet implemented in LABframe");
+			exit(1);
+		}
 	}
 }
 
-/* this makes final rotation ROT->LAB and creates interaction Hamiltonian */
-void ham_hamilton(Sim_info *s, Sim_wsp *wsp)
+/* Spatial rotation ROT->LAB. In DNPframe, nuclear interactions are as in LABframe, electrons are in rotating frame
+ * Having it separate, is should allow implementation of block-diagonalization with respect to electrons
+   Populate with anisotropic parts of interactions.
+ ***/
+void ham_hamilton_dnpframe(Sim_info *sim, Sim_wsp *wsp, complx *d20, mat_complx *d2)
+{
+	int i;
+	double dw;
+	complx cdw, zz;
+	// in current implementation, no block_diag (30.5.2021)
+
+	// wsp->ham_blk is populated with offsets and isotropic parts in ham_hamilton()
+	if (wsp->Hcplx == NULL) {
+		wsp->Hcplx = create_blk_mat_complx_copy2(wsp->ham_blk);
+	}
+	blk_cm_zero(wsp->Hcplx);
+
+	// call labframe for nuclei, result is in wsp->Hcplx first block = assumes block_diag is OFF
+	ham_hamilton_labframe(sim, wsp, d2);
+
+	// add gtensor  anisotropy (isotropic part was added to Hiso in readsys)
+	for (i=0; i<sim->nG; i++) {
+		if (!wsp->G_used[i] || wsp->G_Rrot[i] == NULL) continue;
+		dw = wig20rot(wsp->G_Rrot[i],d20);
+		//DEBUGPRINT("ham_hamilton: adding ANISO gtensor %d (dw=%f)\n",i,dw);
+		if (fabs(dw) > TINY) blk_dm_multod_diag(wsp->ham_blk,wsp->G[i]->T,dw);
+	}
+	// add hyperfine anisotropic part (isotropic part was added to Hiso in readsys)
+	for (i=0; i<sim->nHF; i++) {
+		if (!wsp->HF_used[i] || wsp->HF_Rrot[i] == NULL) continue;
+		dw = wig20rot(wsp->HF_Rrot[i],d20);
+		//DEBUGPRINT("ham_hamilton: adding ANISO hyperfine T20 %d (dw=%f)\n",i,dw);
+		if (fabs(dw) > TINY) blk_dm_multod(wsp->ham_blk,wsp->HF[i]->blk_T,dw);
+		// T2+-1 terms
+		complx *zptr1 = wsp->HF_Rrot[i];
+		complx *zptr2 = &(d2->data[5]); // here is located D-2-1
+		//cv_print(zptr1,"Rrot");
+		cblas_zdotu_sub(LEN(d20),zptr1+1,1,zptr2,1,&cdw);
+		//printf("hyperfine -1: (%g, %g)\n",cdw.re, cdw.im);
+		blk_cm_multocr(wsp->Hcplx,wsp->HF[i]->blk_Tb,cdw);
+		zptr2 = &(d2->data[15]); // here is D-2+1
+		cblas_zdotu_sub(LEN(d20),zptr1+1,1,zptr2,1,&cdw);
+		//printf("hyperfine +1: (%g, %g)\n",cdw.re, cdw.im);
+		blk_cm_multocr(wsp->Hcplx,wsp->HF[i]->blk_Ta,cdw);
+	}
+
+	// wsp->ham_blk will be added in ham_hamilton()
+}
+
+/* Spatial rotation ROT->LAB. In ROTframe, include only T00 and T20 terms of all interactions, and quadrupole higher orders */
+void ham_hamilton_rotframe(Sim_info *s, Sim_wsp *wsp, complx *d20, mat_complx *d2)
 {
 	if (s->do_avg == 1) {
 		ham_hamilton_integrate(s,wsp,wsp->dtmax);
 		blk_dm_muld(wsp->ham_blk,1.0e6/wsp->dtmax);
 		return;
 	}
-	if (s->frame == LABFRAME) {
-		ham_hamilton_labframe(s,wsp);
-		return;
-	}
+
   int i;
   double dw;
-  complx *d20=NULL, cdw, zz;
-  mat_complx *d2=NULL;
-	//LARGE_INTEGER tv1, tv2, tickpsec;
+  complx cdw, zz;
 
-	//QueryPerformanceFrequency(&tickpsec);
-	//QueryPerformanceCounter(&tv1);
-  blk_dm_zero(wsp->ham_blk);
-  if (s->dor == 1) {
-	  mat_complx *md1, *md2;
-	  md1 = wigner2(s->wr1*wsp->t*1.0e-6*RAD2DEG+wsp->gamma_add,s->brl1,0.0);
-	  md2 = wigner2(s->wr2*wsp->t*1.0e-6*RAD2DEG,s->brl2,0.0);
-	  d2 = cm_mul(md1,md2);
-	  d20 = complx_vector(5);
-	  for (i=1;i<=5;i++) d20[i] = cm_getelem(d2,i,3);
-	  free_complx_matrix(md1);
-	  free_complx_matrix(md2);
-  } else {
-	  d20 = wigner20(s->wr*wsp->t*1.0e-6*RAD2DEG+wsp->gamma_add,wsp->brl);
-	  if ( (s->nQ != 0) || (s->nHF != 0) ) d2 = wigner2(s->wr*wsp->t*1.0e-6*RAD2DEG+wsp->gamma_add,wsp->brl,0.0);
-  }
-  
-  blk_dm_multod(wsp->ham_blk,wsp->Hiso,1.0);
-  if (wsp->Nint_off) {
-	  assert(wsp->Hiso_off);
-	  blk_dm_multod(wsp->ham_blk,wsp->Hiso_off,-1.0);
-  }
-
+  // wsp->ham_blk is prepared in ham_hamilton()
   if (s->Hassembly) {
 	  complx res[6];
 	  wig2rot_t(res,d20,wsp->Dmol_rot);
@@ -885,7 +913,7 @@ void ham_hamilton(Sim_info *s, Sim_wsp *wsp)
 		  blk_dm_multod(wsp->ham_blk,wsp->HQ_off[3],-2.0*res[5].re);
 		  blk_dm_multod(wsp->ham_blk,wsp->HQ_off[4],2.0*res[5].im);
 	  }
-	  // but we miss T2+-1 terms of Hyperfine interaction
+	  // in ROTframe we omit the pseudosecular T2+-1 terms of Hyperfine interaction
   } else {
 	  for (i=0; i<s->nCS; i++) {
 		  if (!wsp->CS_used[i] || wsp->CS_Rrot[i] == NULL) continue;
@@ -914,8 +942,13 @@ void ham_hamilton(Sim_info *s, Sim_wsp *wsp)
 		  //DEBUGPRINT("ham_hamilton: adding ANISO gtensor %d (dw=%f)\n",i,dw);
 		  if (fabs(dw) > TINY) blk_dm_multod_diag(wsp->ham_blk,wsp->G[i]->T,dw);
 	  }
+	  for (i=0; i<s->nHF; i++) { // adds the secular part but not the pseudosecular part, so no DNP transfers possible
+		  if (!wsp->HF_used[i] || wsp->HF_Rrot[i] == NULL) continue;
+		  dw = wig20rot(wsp->HF_Rrot[i],d20);
+		  //DEBUGPRINT("ham_hamilton: adding ANISO hyperfine T20 %d (dw=%f)\n",i,dw);
+		  if (fabs(dw) > TINY) blk_dm_multod(wsp->ham_blk,wsp->HF[i]->blk_T,dw);
+	  }
   }
-
 
   /* quadrupoles are special */
   for (i=0; i<s->nQ; i++) {
@@ -986,60 +1019,98 @@ void ham_hamilton(Sim_info *s, Sim_wsp *wsp)
 		  }
 	  }
   }
-  /* Hyperfine terms are special as well */
-  for (i=0; i<s->nHF; i++) {
-	  if (!wsp->HF_used[i] || wsp->HF_Rrot[i] == NULL) continue;
-	  assert(s->frame == DNPFRAME);
-	  if (wsp->Hcplx == NULL) {
-		  wsp->Hcplx = create_blk_mat_complx_copy2(wsp->ham_blk);
-		  blk_cm_zero(wsp->Hcplx);
-	  }
-	  if (!s->Hassembly) { // T20 term
-		  dw = wig20rot(wsp->HF_Rrot[i],d20);
-		  //DEBUGPRINT("ham_hamilton: adding ANISO hyperfine %d (dw=%f)\n",i,dw);
-		  if (fabs(dw) > TINY) blk_dm_multod(wsp->ham_blk,wsp->HF[i]->blk_T,dw);
-	  } // else only T2+-1 terms are missing
-	  complx *zptr1 = wsp->HF_Rrot[i];
-	  complx *zptr2 = &(d2->data[5]); // here is located D-2-1
-	  //cv_print(zptr1,"Rrot");
-	  cblas_zdotu_sub(LEN(d20),zptr1+1,1,zptr2,1,&cdw);
-	  //printf("hyperfine -1: (%g, %g)\n",cdw.re, cdw.im);
-	  //assert( fabs(cdw.im) < TINY);
-	  blk_cm_multocr(wsp->Hcplx,wsp->HF[i]->blk_Tb,cdw);
-	  zptr2 = &(d2->data[15]); // here is D-2+1
-	  cblas_zdotu_sub(LEN(d20),zptr1+1,1,zptr2,1,&cdw);
-	  //printf("hyperfine +1: (%g, %g)\n",cdw.re, cdw.im);
-	  //assert( fabs(cdw.im) < TINY);
-	  blk_cm_multocr(wsp->Hcplx,wsp->HF[i]->blk_Ta,cdw);
-  }
-
-  /* offset terms */
-  if (wsp->offset != NULL || wsp->inhom_offset != NULL) {
-	  int nch = s->ss->nchan;
-	  double *ovals = double_vector(nch);
-	  dv_zero(ovals);
-	  if (wsp->offset != NULL) dv_multod(ovals,wsp->offset,1.0);
-	  if (wsp->inhom_offset != NULL) dv_multod(ovals,wsp->inhom_offset,1.0);
-	  for (i=1; i<=nch; i++) {
-		  //printf("ham_hamilton: adding offsets %g to channel %d\n",ovals[i],i);
-		  blk_dm_multod_diag(wsp->ham_blk,wsp->chan_Iz[i],ovals[i]);
-	  }
-	  free_double_vector(ovals);
-  }
-
-
-  free_complx_vector(d20);
-  if (d2 != NULL) free_complx_matrix(d2);
-
-  if (s->frame == DNPFRAME) {
-	  assert(wsp->Hcplx != NULL);
-	  blk_cm_multocr(wsp->Hcplx,wsp->ham_blk,Cunit);
-  }
-
-	//QueryPerformanceCounter(&tv2);
-	//printf("\t\tham_hamilton time: %.9f\n",((float)(tv2.QuadPart-tv1.QuadPart))/(float)tickpsec.QuadPart);
-
+  // wsp->ham_blk is DONE.
 }
+
+/* this makes final rotation ROT->LAB and creates interaction Hamiltonian */
+void ham_hamilton(Sim_info *sim, Sim_wsp *wsp)
+{
+	int i;
+	complx *d20=NULL;
+	mat_complx *d2=NULL;
+
+	// transformation matrices
+	if (sim->dor == 1) {
+		mat_complx *md1, *md2;
+		md1 = wigner2(sim->wr1*wsp->t*1.0e-6*RAD2DEG+wsp->gamma_add,sim->brl1,0.0);
+		md2 = wigner2(sim->wr2*wsp->t*1.0e-6*RAD2DEG,sim->brl2,0.0);
+		d2 = cm_mul(md1,md2);
+		d20 = complx_vector(5);
+		for (i=1;i<=5;i++) d20[i] = cm_getelem(d2,i,3);
+		free_complx_matrix(md1);
+		free_complx_matrix(md2);
+	} else {
+		d20 = wigner20(sim->wr*wsp->t*1.0e-6*RAD2DEG+wsp->gamma_add,wsp->brl);
+		d2 = wigner2(sim->wr*wsp->t*1.0e-6*RAD2DEG+wsp->gamma_add,wsp->brl,0.0);
+	}
+
+	// adding interactions
+	assert(wsp->ham_blk != NULL);
+	blk_dm_zero(wsp->ham_blk);
+
+	/* offset terms */
+	if (wsp->inhom_offset != NULL) {
+		fprintf(stderr,"Error: checkpoint in ham.c, function ham_hamiltion() - inhomogeneity offsets are disabled\n");
+		exit(1);
+	}
+	if (wsp->offset != NULL) {
+		for (i=1; i<=sim->ss->nchan; i++) {
+			//printf("ham_hamilton: adding offsets %g to channel %d\n",ovals[i],i);
+			switch (sim->frame) {
+			case ROTFRAME:
+				blk_dm_multod_diag(wsp->ham_blk,wsp->chan_Iz[i],wsp->offset[i]);
+				break;
+			case DNPFRAME:
+				if (sim->ss->iso[sim->ss->chan[i][1]]->number == 0) { // it is electron channel
+					printf("ham_hamilton is adding electron offset\n");
+					blk_dm_multod_diag(wsp->ham_blk,wsp->chan_Iz[i],wsp->offset[i]);
+				}
+				break;
+			case LABFRAME:
+				// do nothing
+				break;
+			default :
+				fprintf(stderr,"Error in ham_hamiltion() - invalid sim->frame %d\n",sim->frame);
+				exit(1);
+			}
+		}
+	}
+
+	// add isotropic part of Hamiltonian
+	blk_dm_multod(wsp->ham_blk,wsp->Hiso,1.0);
+	if (wsp->Nint_off) {
+		assert(wsp->Hiso_off);
+		blk_dm_multod(wsp->ham_blk,wsp->Hiso_off,-1.0);
+	}
+
+	// add anisotropic parts, depending on calculation frame
+	switch (sim->frame) {
+	case ROTFRAME :
+		ham_hamilton_rotframe(sim, wsp, d20, d2);
+		// Hamiltonian is in wsp->ham_blk and it is block-diagonal and real
+		break;
+	case DNPFRAME:
+		ham_hamilton_dnpframe(sim, wsp, d20, d2);
+		// Hamiltonian is in wsp->Hcplx and it is block-diagonal and complex; wsp->ham_blk was also modified
+		blk_cm_multocr(wsp->Hcplx,wsp->ham_blk,Cunit);
+		break;
+	case LABFRAME:
+		ham_hamilton_labframe(sim, wsp, d2);
+		// Hamiltonian is in wsp->Hcplx first block and it is complex
+		// now add isotropic part to Hlab
+	    assert(wsp->ham_blk->Nblocks == 1);
+	    blk_cm_multocr(wsp->Hcplx,wsp->ham_blk,Cunit);
+		break;
+	default:
+		fprintf(stderr,"Error: ham_hamilton - simulation frame (%d) not recognized\n",sim->frame);
+		exit(1);
+	}
+
+	// clean up
+	if (d20 != NULL) free_complx_vector(d20);
+	if (d2 != NULL) free_complx_matrix(d2);
+}
+
 
 /*  int_t1^t2 exp(-i m wr t) = -i/(m wr) (exp(-i m wr t2) - exp(-i m wr t1)) */
 void integ(complx* R,double t1,double t2,double wr)

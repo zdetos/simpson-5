@@ -31,7 +31,7 @@ extern "C" {
 
 /* Version number of SIMPSON package */
 #define PACKAGE "SIMPSON"
-#define SIMPSON_VERSION "4.2"
+#define SIMPSON_VERSION "5.0"
     
 
     

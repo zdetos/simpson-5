@@ -1773,6 +1773,16 @@ mat_complx * ss_eq_sigma(Sim_info* sim)
    return sum;
 }
 
+/* Larmor frequency from active sim structure */
+double ss_larmor_frequency(Sim_info *sim, int nuc)
+{
+	double res;
+
+	res = ss_gamma(sim->ss,nuc)*sim->specfreq/ss_gamma1H()*2*M_PI;
+
+	return res;
+}
+
 int tclIsotopes(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
 {
   char buf[256];

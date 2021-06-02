@@ -76,7 +76,9 @@ void fill_Tquad_3(Sim_info *sim, Quadrupole *qptr);
 void fill_Tmix_dipole(Sim_info *sim, Mixing *mptr);
 void fill_Tabmix_dipole(Sim_info *sim, Mixing *mptr);
 void fill_hyperfine_Tab(Sim_info *sim, Hyperfine *mptr);
-// fff
+
+/* Larmor frequency from active sim structure */
+double ss_larmor_frequency(Sim_info *sim, int nuc);
 
 #endif
 

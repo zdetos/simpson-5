@@ -1102,18 +1102,14 @@ Sim_wsp * wsp_initialize(Sim_info *s)
     wsp->FWTASG_irow = NULL;
     wsp->FWTASG_icol = NULL;
 
-    // labframe
-    if (s->frame == LABFRAME) {
-    	wsp->Hlab = complx_matrix(s->matdim,s->matdim,MAT_DENSE,0,s->basis);
-    	wsp->Hrflab = complx_matrix(s->matdim,s->matdim,MAT_DENSE,0,s->basis);
-    } else {
-    	wsp->Hlab = NULL;
-    	wsp->Hrflab = NULL;
-    }
-
     // complex Hamiltonian
-    wsp->Hcplx = NULL;
-    wsp->Hrf_blk = NULL;
+    if (s->frame == DNPFRAME || s->frame == LABFRAME) {
+    	wsp->Hcplx = create_blk_mat_complx_copy2(wsp->ham_blk);
+    	wsp->Hrf_blk = create_blk_mat_complx_copy2(wsp->ham_blk);
+    } else {
+    	wsp->Hcplx = NULL;
+    	wsp->Hrf_blk = NULL;
+    }
 
 	DEBUGPRINT("wsp_initialize end\n");
 
@@ -1339,16 +1335,6 @@ void wsp_destroy(Sim_info *s, Sim_wsp *wsp)
     if (wsp->FWTASG_icol != NULL) {
     	free(wsp->FWTASG_icol);
     	wsp->FWTASG_icol = NULL;
-    }
-
-    // labframe
-    if (wsp->Hlab != NULL) {
-    	free_complx_matrix(wsp->Hlab);
-    	wsp->Hlab = NULL;
-    }
-    if (wsp->Hrflab != NULL) {
-    	free_complx_matrix(wsp->Hrflab);
-    	wsp->Hrflab = NULL;
     }
 
     // complex Hamiltonian

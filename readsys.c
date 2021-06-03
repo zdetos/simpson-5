@@ -1024,7 +1024,8 @@ void readsys(Tcl_Interp* interp,Sim_info* s)
 		  } else { // create additional shift structure
 			  csptr = s->CS[(s->nCS)++] = (Shift*)malloc(sizeof(Shift));
 			  assert(s->nCS <= Nshift);
-		      csptr->nuc = i; csptr->iso = 0; csptr->delta = 0; csptr->eta = 0;
+		      csptr->nuc = i; csptr->iso = 0; csptr->delta = 0; csptr->eta = 0; csptr->pas[0] = 0; csptr->pas[1] = 0; csptr->pas[2] = 0;
+		      csptr->Rmol = NULL; csptr->T = NULL; csptr->T2q[0] = csptr->T2q[1] = csptr->T2q[2] = csptr->T2q[3] = csptr->T2q[4] = NULL;
 		  }
 		  csptr->Larmor_frequency = ss_larmor_frequency(s, csptr->nuc);
 		  if (ver) {

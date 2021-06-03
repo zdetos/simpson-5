@@ -1824,12 +1824,38 @@ int tclPulseShaped(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
     	  } else {
     		  if ( OCpar.gradmodeprop == 1 ) {
     			  /* do stuff for propagator optimization */
-    			  _pulse_shapedOCprops_2(sim,wsp,Nelem,OCchanmap,mask,steptime);
+    			  switch (sim->frame) {
+    			  case ROTFRAME:
+    				  _pulse_shapedOCprops_2(sim,wsp,Nelem,OCchanmap,mask,steptime);
+    				  break;
+    			  case DNPFRAME:
+    			  case LABFRAME:
+    				  fprintf(stderr,"Error: optimal control on propagators not supported in DNP/LAB frames (checkpoint tclPulseShaped)\n");
+    				  exit(1);
+    				  break;
+    			  default:
+    				  fprintf(stderr,"Error: unknown calculation frame %d (checkpoint tclPulseShaped 1)\n",sim->frame);
+    				  exit(1);
+    			  }
+
     		  } else {
     			  /* do stuff for state to state optimization */
-    			  _pulse_shapedOC_2(sim,wsp,Nelem,OCchanmap,mask,steptime);
+    			  switch (sim->frame) {
+    			  case ROTFRAME:
+    				  _pulse_shapedOC_2(sim,wsp,Nelem,OCchanmap,mask,steptime);
+    				  break;
+    			  case DNPFRAME:
+    				  _pulse_shapedOC_2_dnpframe(sim,wsp,Nelem,OCchanmap,mask,steptime);
+    				  break;
+    			  case LABFRAME:
+    				  fprintf(stderr,"Error: optimal control not supported in LABframe (checkpoint tclPulseShaped)\n");
+    				  exit(1);
+    				  break;
+    			  default:
+    				  fprintf(stderr,"Error: unknown calculation frame %d (checkpoint tclPulseShaped 1)\n",sim->frame);
+    				  exit(1);
+    			  }
     		  }
-
     	  }
     	  free_int_vector(OCchanmap);
       }

@@ -462,6 +462,250 @@ void OC_commutator(mat_complx *cH,mat_complx *kom,int iter,mat_complx *cdum, dou
 	}
 }
 
+/*****
+ * for DNPframe and electron channel only
+ * grads via expansion in nested commutators. Mostly copy-paste from _pulse_shapedOC_2
+ */
+void _pulse_shapedOC_2_dnpframe(Sim_info *sim, Sim_wsp *wsp, int Nelem, int *OCchanmap, int *mask, double duration)
+{
+	int i, j, k, l, n;
+	double dt, dt_us;
+	int dim = wsp->ham_blk->dim;
+	int dim2 = dim*dim;
+	int Nsh = LEN(OCchanmap);
+	mat_complx *cH = NULL, *kom = NULL, *cdum = NULL;
+	complx *cvec = NULL;
+	mat_complx *gr = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+	// variables for rfmap hack
+	int iz = 0, iphi = 0, Nphi = 0, iphi_shift = 0;
+	double steptimephi = 0.0, phitime = 0.0;
+	// duration is steptime
+
+	assert(wsp->dU != NULL);
+	assert(wsp->dU->Nblocks == 1); /* no block_diag */
+	assert(wsp->Hcplx != NULL);
+	assert(wsp->Hcplx->Nblocks == 1);
+
+	if (wsp->Uisunit != 1) {
+		/* there is some pending propagator, store it but make no gradient */
+		incr_OCmx_pos(wsp);
+		store_OCprop(wsp);
+		store_OCdens(sim,wsp); /* store sigma from previous step */
+		_evolve_with_prop(sim,wsp); /* get sigma ready for next store */
+		_reset_prop(sim,wsp);
+	}
+
+	int iter;
+	int maxiter = -1; /* exact gradients calculated via exponential */
+	double tol;
+	double maxtol = 1e-6;
+	if (fabs(OCpar.grad_level)<0.5) {
+		/* gradient with higher order corrections up to grad_level accuracy */
+		maxiter = 10;
+		maxtol = fabs(OCpar.grad_level);
+	} else if (OCpar.grad_level > 1.5){
+		/* gradient with higher order corrections up to grad_level order */
+		maxiter = (int)round(OCpar.grad_level);
+		maxtol = 1e-10;
+	}
+	//printf("pulse_shaped_OC: maxiter = %d, tol = %g\n",maxiter,maxtol);
+
+	/* do pulsing, gradients, evolving, storing the results */
+	n = (int)ceil(duration/wsp->dtmax);
+	if (n < 1) n = 1;
+	dt_us = duration/(double)n;
+	dt = dt_us*1.0e-6;
+	//printf("_pulse_shapedOC_2 duration of %f us split into %d steps of %f us\n",duration,n,dt*1.0e+6);
+	// pre-hack block of rfmap and RotorModulated
+	if (sim->rfmap != NULL) { // we have RotorModulated, initialize variables
+		iz = sim->rfmap->loop[(wsp->rf_idx)*2+0]; // z coil coordinate index
+		iphi = sim->rfmap->loop[(wsp->rf_idx)*2+1];  // coil initial "phase" index
+		Nphi = sim->rfmap->z[iz*(sim->rfmap->Nch+1)+sim->rfmap->Nch]; // number of phi elements for current z position
+		steptimephi = sim->taur/Nphi;
+		assert(steptimephi - duration >= -TINY); // limitation for fine-digitized shapes, steptime <=> duration
+		iphi_shift = 0;
+		phitime = 0.0;
+	} // end of pre-hack block of rfmap and RotorModulated
+	for (j=1; j<=Nelem; j++) {
+		for (i=1; i<=sim->ss->nchan; i++) {
+			if (mask[i] == -1) {
+				_rf(wsp,i,0.0);
+				_ph(wsp,i,0.0);
+			} else {
+				_rf(wsp,i,RFshapes[mask[i]][j].ampl);
+				_ph(wsp,i,RFshapes[mask[i]][j].phase);
+			}
+		}
+		incr_OCmx_pos(wsp);
+		/* like _pulse_simple */
+		for (i=1;i<=n;i++) { // loop over maxdt steps
+			ham_hamilton(sim,wsp);
+			_setrfprop_labdnp(sim,wsp); // it needs to be called here as the pulse parameters are changing every maxdt (wsp->dtmax)
+			//blk_dm_print(wsp->ham_blk,"Ham int real");
+			if (maxiter<0) {
+				/* exact gradients calculated via exponential */
+				fprintf(stderr,"Error: _pulse_shapedOC_2_dnpframe - not implemented exact grads via expm\n");
+				exit(1);
+			}else {
+				double scl;
+				complx cscl;
+				/* gradients improved with higher order terms */
+				if (kom == NULL) {
+					kom = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+					cdum = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+				}
+				//ham_hamrf_complex(cH, sim, wsp);
+				blk_cm_multod(wsp->Hcplx,wsp->Hrf_blk,1.0);
+				cH = wsp->Hcplx->m;
+				blk_cm_unit(wsp->dU);
+				blk_prop_complx_3(wsp->dU,wsp->Hcplx,dt,sim);
+				for (k=1; k<=Nsh; k++) { /* loop over all gradshapes */
+					//printf("OCchanmap[%d] = %d\n",k,OCchanmap[k]);
+					if (OCchanmap[k] < 0) { /* this shape is not active */
+						if (wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)] != NULL) {
+							free_complx_matrix(wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)]);
+							wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)] = NULL;
+							//printf("free and NULL (%d,%d)\n",wsp->OC_mxpos,2*(k-1));
+						}
+						if (wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)+1] != NULL) {
+							free_complx_matrix(wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)+1]);
+							wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)+1] = NULL;
+							//printf("free and NULL (%d,%d)\n",wsp->OC_mxpos,2*(k-1)+1);
+						}
+						continue;
+					}
+					if (wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)] == NULL) {
+						wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)] = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+						//printf("alloc (%d,%d)\n",wsp->OC_mxpos,2*(k-1));
+					}
+					if (wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)+1] == NULL) {
+						wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)+1] = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+						//printf("alloc (%d,%d)\n",wsp->OC_mxpos,2*(k-1)+1);
+					}
+					/* x channel */
+					cm_zero(gr);
+					cblas_daxpy(dim2,-1.0,wsp->chan_Ix[OCchanmap[k]]->data,1,(double*)(gr->data)+1,2); /* first order */
+					cm_zero(kom);
+					cblas_dcopy(dim2,wsp->chan_Ix[OCchanmap[k]]->data,1,(double*)(kom->data),2);
+					//cm_print(kom,"channel Ix");
+					iter=1;
+					tol = 1000;
+					scl = dt/2.0;
+					while (iter < maxiter && tol > maxtol) {
+						//printf("Iter %d, tol %g\n============\n",iter,tol);
+						//cm_print(gr,"gr matrix");
+						OC_commutator(cH,kom,iter,cdum, &tol);
+						//cm_print(kom,"komutator");
+						switch (iter % 4) {
+						case 0: cscl.re = 0; cscl.im = -scl;
+							break;
+						case 1: cscl.re = scl; cscl.im = 0;
+							break;
+						case 2: cscl.re = 0; cscl.im = scl;
+							break;
+						case 3: cscl.re = -scl; cscl.im = 0;
+							break;
+						}
+						cblas_zaxpy(dim2,&cscl, kom->data,1,gr->data,1);
+						tol *= scl;
+						scl *= (dt/((double)(iter)+2.0));
+						iter++;
+					}
+					cm_multo_rev(gr,wsp->dU->m); /* gr is done here */
+					//cm_print(gr,"READY grad");
+					//exit(1);
+					if (i==1) {
+						cm_copy(wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)],gr);
+					} else {
+						cm_multo_rev(wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)],wsp->dU->m);
+						cblas_zgemm(CblasColMajor,CblasNoTrans,CblasNoTrans,dim,dim,dim,&Cunit,gr->data,dim,wsp->U->m->data,dim,&Cunit,wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)]->data,dim);
+					}
+					/* y channel */
+					cm_zero(gr);
+					cblas_daxpy(dim2,1.0,wsp->chan_Iy[OCchanmap[k]]->data,1,(double*)(gr->data),2); /* first order */
+					cm_zero(kom);
+					cblas_dcopy(dim2,wsp->chan_Iy[OCchanmap[k]]->data,1,(double*)(kom->data)+1,2);
+					//cm_print(kom,"channel Iy");
+					iter=1;
+					tol = 1000;
+					scl = dt/2.0;
+					while (iter < maxiter && tol > maxtol) {
+						//printf("Iter %d, tol %g\n============\n",iter,tol);
+						//cm_print(gr,"gr matrix");
+						OC_commutator(cH,kom,iter,cdum, &tol);
+						//cm_print(kom,"komutator");
+						switch (iter % 4) {
+						case 0: cscl.re = 0; cscl.im = -scl;
+							break;
+						case 1: cscl.re = scl; cscl.im = 0;
+							break;
+						case 2: cscl.re = 0; cscl.im = scl;
+							break;
+						case 3: cscl.re = -scl; cscl.im = 0;
+							break;
+						}
+						cblas_zaxpy(dim2,&cscl, kom->data,1,gr->data,1);
+						tol *= scl;
+						scl *= (dt/((double)(iter)+2.0));
+						iter++;
+					}
+					cm_multo_rev(gr,wsp->dU->m); /* gr is done here */
+					//cm_print(gr,"READY grad");
+					//exit(1);
+					if (i==1) {
+						cm_copy(wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)+1],gr);
+					} else {
+						cm_multo_rev(wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)+1],wsp->dU->m);
+						cblas_zgemm(CblasColMajor,CblasNoTrans,CblasNoTrans,dim,dim,dim,&Cunit,gr->data,dim,wsp->U->m->data,dim,&Cunit,wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)+1]->data,dim);
+					}
+				}
+			}
+			/* update kumulativni propagator ve wsp->U */
+			update_propagator(wsp->U, wsp->dU, sim, wsp);
+			wsp->t += dt_us;
+		} /* end for i over maxdt steps inside pulse step */
+		store_OCprop(wsp);
+		store_OCdens(sim,wsp); /* sigma of previous step */
+		_evolve_with_prop(sim,wsp); /* get sigma ready for the next step */
+		_reset_prop(sim,wsp);
+		// hack for RotorModulated
+		if (sim->rfmap != NULL) { // we have RotorModulated
+			for (k=1; k<=Nsh; k++) { /* loop over all gradshapes */
+				if (OCchanmap[k] < 0) { /* this shape is not active */
+					continue;
+				}
+			//-	int iz = sim->rfmap->loop[(wsp->rf_idx)*2+0];
+			//-	int iphi = sim->rfmap->loop[(wsp->rf_idx)*2+1];
+				double bx, by;
+				//rfmap_get(sim->rfmap,iz,iphi+j-1,OCchanmap[k]-1,&bx,&by);
+				rfmap_get(sim->rfmap,iz,iphi+iphi_shift,OCchanmap[k]-1,&bx,&by); // get distortion coefs
+				mat_complx *dUx = wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)];   // dU/dwx
+				mat_complx *dUy = wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)+1]; // dU/dwy
+				mat_complx *dUx2 = cm_dup(dUx);
+				cm_muld(dUx,bx);
+				cm_multod(dUx,dUy,by);
+				cm_muld(dUy,bx);
+				cm_multod(dUy,dUx2,-by);
+				free_complx_matrix(dUx2);
+				//printf("GRAD: Thread %d: chan %d, slot %3d: phitime = %g ... %d %g %g\n",wsp->thread_id,OCchanmap[k],-1,phitime,j,bx,by);
+			}
+			// this needs to be last at the end of loop over j (shape elements)
+			phitime += duration;  // steptime <=> duration
+  		    if (steptimephi-phitime < 0.5*duration) {
+			    phitime -= steptimephi;
+				iphi_shift++;
+			}
+		} // end of hack
+	} /* end for j over Nelem */
+
+	// cH is a pointer to existing complex Hamiltonian wsp->Hcplx->m, do nto free it here
+	if (kom != NULL) free_complx_matrix(kom);
+	if (cdum != NULL) free_complx_matrix(cdum);
+	free_complx_matrix(gr);
+	//printf("_pulse_shapedOC_2 done\n");
+
+}
+
 /****
  * NOT FINISHED exact gradients via exponentialization.
  * Finished: grads via expansion in nested commutators

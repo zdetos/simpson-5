@@ -24,6 +24,7 @@
 #include "lapacke/lapacke.h"
 #else
 #include "cblas.h"
+#include "lapacke.h"
 #endif
 #include "cm.h"
 #include "blockdiag.h"

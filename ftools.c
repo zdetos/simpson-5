@@ -1452,7 +1452,7 @@ int tclFRms(ClientData data,Tcl_Interp* interp,int argc, char *argv[])
   complx *vec,*vec2;
   double v1,v2;
   int part;
-  char **par,**par2,*range;
+  const char **par,**par2,*range;
   int i,i1,i2,npar,npar2;
   double sumrms,sumint;
 
@@ -1567,7 +1567,7 @@ int tclFAutoscale(ClientData data,Tcl_Interp* interp,int argc, char *argv[])
   complx *vec,*vec2;
   double v1,v2;
   int part;
-  char **par,**par2,*range;
+  const char **par,**par2,*range;
   int i,i1,i2,npar,npar2;
   double sumxx,sumxy,scale;
 
@@ -1661,7 +1661,8 @@ int tclFInt(ClientData data,Tcl_Interp* interp,int argc, char *argv[])
   int nvec;
   complx *vec;
   double v1,v2;
-  char **par,**par2,buf[256];
+  const char **par,**par2;
+  char buf[256];
   int i,j,i1,i2,npar,npar2;
   double area;
 
@@ -1776,7 +1777,7 @@ int tclFZero(ClientData data,Tcl_Interp* interp,int argc, char *argv[])
   int fidN,nvec;  
   complx* vec;
   double v1,v2;
-  char **par,**par2;
+  const char **par,**par2;
   int i,i1,i2,npar,npar2;
 
   if (argc != 3 && argc != 2)
@@ -1830,9 +1831,9 @@ int tclFZero(ClientData data,Tcl_Interp* interp,int argc, char *argv[])
     if (i1 < i2) {
       memset(&vec[i1],0,sizeof(complx)*(i2-i1+1));
     }
-    free(par2);
+    Tcl_Free((char *)par2);
   }
-  free(par);
+  Tcl_Free((char *)par);
   return TCL_OK;
 }
    
@@ -2604,7 +2605,8 @@ int tclFAddpeaks(ClientData data,Tcl_Interp* interp,int argc, char *argv[])
   complx* dat;
   double *x;
   double frq,in,lb,lg,cutoff;
-  char **par,**par2,buf[128];
+  const char **par,**par2;
+  char buf[128];
   int i,i0,k,npar,npar2,np;
   double re,relast;
 
@@ -2732,7 +2734,7 @@ int tclFAddpeaks2D(ClientData data,Tcl_Interp* interp,int argc, char *argv[])
   complx* dat;
   double *x, *y;
   double frq,in,lb,lg,cutoff,frq1,lb1;
-  char **par,**par2;
+  const char **par,**par2;
   int i,i0,j0,k,npar,npar2,np,j,imin,imax,jmin,jmax,ni;
   
   if (argc != 4)

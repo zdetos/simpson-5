@@ -127,6 +127,7 @@
 		<configuration configurationName="Release">
 			<resource resourceType="PROJECT" workspacePath="/simpson_local"/>
 		</configuration>
+		<configuration configurationName="Debug-static-libs"/>
 	</storageModule>
 	<storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
 	<storageModule moduleId="org.eclipse.cdt.internal.ui.text.commentOwnerProjectMappings"/>

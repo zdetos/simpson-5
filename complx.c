@@ -26,7 +26,7 @@
 complx Cnull={0.0,0.0};
 complx Cunit={1.0,0.0};
 
-SIMPSON_INLINE complx Complx(double re,double im)
+complx Complx(double re,double im)
 {
   complx c;
 
@@ -35,7 +35,7 @@ SIMPSON_INLINE complx Complx(double re,double im)
   return c;
 }
 
-SIMPSON_INLINE complx Cmul(complx a,complx b)
+complx Cmul(complx a,complx b)
 {
   complx c;
 
@@ -44,7 +44,7 @@ SIMPSON_INLINE complx Cmul(complx a,complx b)
   return c;
 }
 
-SIMPSON_INLINE complx Cadd(complx a,complx b)
+complx Cadd(complx a,complx b)
 {
   complx c;
   c.re=a.re+b.re;
@@ -52,7 +52,7 @@ SIMPSON_INLINE complx Cadd(complx a,complx b)
   return c;
 }
 
-SIMPSON_INLINE complx Conj(complx z)
+complx Conj(complx z)
 {
   z.im= -z.im;
   return z;
@@ -151,7 +151,7 @@ complx RCmul(double x,complx a)
   return a;
 }
 
-SIMPSON_INLINE complx CRmul(complx a,double x)
+complx CRmul(complx a,double x)
 {
   a.re *= x;
   a.im *= x;
@@ -168,7 +168,7 @@ complx Cexp(complx z)
   return z;
 }
 
-SIMPSON_INLINE complx Cexpi(double im)
+complx Cexpi(double im)
 {
   complx z;
   z.re=cos(im);

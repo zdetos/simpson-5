@@ -204,6 +204,7 @@ int main (int argc,char *argv[])
 		   DEBUGPRINT("\n\nMain: evaluating 'main' section\n\n");
 		   if (Tcl_Eval(interp, "main") != TCL_OK) {
 			   fprintf(stderr,"Error when evaluating 'main' section of input script %s:\n%s\n",argv[1],Tcl_GetStringResult(interp));
+			   exit(1);
 		   }
 
 		    //simpson_fftw_test();

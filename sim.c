@@ -111,42 +111,6 @@ Sim_info * sim_initialize(Tcl_Interp* interp)
     exit(1);
   } 
 
-  f=TclGetDouble(interp,"par","proton_frequency",0,400e6);  
-  if (f < 0.0) {
-     fprintf(stderr,"error: proton_frequency must be positive\n");
-     exit(1);
-  }
-  if (f != 0 && f <= 10000) {
-     fprintf(stderr,"error: proton_frequency must be given in Hz\n");
-     exit(1);
-  }
-  /* Internal in the program we use omega= -gamma B0, that is the
-     proton resonance frequency is negative because gamma for at
-     proton is positive. */
-  s->specfreq = -f;
-  f = TclGetDouble(interp,"par","magnetic_field",0,-100001);
-  if (f > -100000) { //i.e. it actually was defined by user
-	  if ( f < TINY ) {
-		  fprintf(stderr,"Error: field must be positive and nonzero\n");
-		  exit(1);
-	  }
-	  s->Bzero = f;
-	  s->specfreq = -ss_gamma1H()*1e7*f/(2*M_PI);
-  } else {
-	  s->Bzero = -s->specfreq*2*M_PI/ss_gamma1H()*1e-7;
-  }
-  //printf("sim.c Bzero = %g\n",s->Bzero);
-
-  s->wr=TclGetDouble(interp,"par","spin_rate",0,0);
-  if (s->wr < 0.0) {
-     fprintf(stderr,"error: spin_rate cannot be negative\n");
-     exit(1);
-  }
-  s->sw=TclGetDouble(interp,"par","sw",0,s->wr);
-  s->sw1=TclGetDouble(interp,"par","sw1",0,0);
-  s->np=TclGetInt(interp,"par","np",0,1);
-  s->ni=TclGetInt(interp,"par","ni",0,0);
-
   // read and decompose par(method)
   //  DEFAULTS:
   s->imethod = M_DIRECT_TIME;
@@ -236,6 +200,50 @@ Sim_info * sim_initialize(Tcl_Interp* interp)
 	  exit(1);
   }
 #endif
+
+
+  f=TclGetDouble(interp,"par","proton_frequency",0,400e6);
+  if (s->frame == ROTFRAME) { // these are original checks, noe disabled for DNP-LAB frames
+     if (f < 0.0) {
+        fprintf(stderr,"error: proton_frequency must be positive\n");
+        exit(1);
+     }
+     if (f != 0 && f <= 10000) {
+        fprintf(stderr,"error: proton_frequency must be given in Hz\n");
+        exit(1);
+     }
+  }
+  /* Internal in the program we use omega= -gamma B0, that is the
+     proton resonance frequency is negative because gamma for at
+     proton is positive. */
+  s->specfreq = -f;
+  f = TclGetDouble(interp,"par","magnetic_field",0,-1000001);
+  if (f > -1000000) { //i.e. it actually was defined by user
+	  /***   allow negative and zero magnetic fields
+	  if ( f < TINY ) {
+		  fprintf(stderr,"Error: field must be positive and nonzero\n");
+		  exit(1);
+	  }
+	  ***/
+	  s->Bzero = f;
+	  s->specfreq = -ss_gamma1H()*1e7*f/(2*M_PI);
+  } else {
+	  s->Bzero = -s->specfreq*2*M_PI/ss_gamma1H()*1e-7;
+  }
+  //printf("sim.c Bzero = %g\n",s->Bzero);
+
+  s->wr=TclGetDouble(interp,"par","spin_rate",0,0);
+  if (s->frame == ROTFRAME) { // allow negative MAS frequencies in LAB-DNP frames
+     if (s->wr < 0.0) {
+        fprintf(stderr,"error: spin_rate cannot be negative\n");
+        exit(1);
+     }
+  }
+  s->sw=TclGetDouble(interp,"par","sw",0,s->wr);
+  s->sw1=TclGetDouble(interp,"par","sw1",0,0);
+  s->np=TclGetInt(interp,"par","np",0,1);
+  s->ni=TclGetInt(interp,"par","ni",0,0);
+
 
   s->points_per_cycle = TclGetInt(interp,"par","points_per_cycle",0,8);
 
@@ -728,6 +736,24 @@ void sim_destroy(Sim_info* s, int this_is_copy)
   }
   free(s->HF);
 
+  for (i=0; i<s->nHEX; i++) {
+	  Heisenberg_exchange *ptr = s->HEx[i];
+	  if (ptr->blk_Tiso) free_blk_mat_double(ptr->blk_Tiso);
+ 	  free((char*)(ptr));
+ }
+  free(s->HEx);
+
+  for (i=0; i<s->nEDD; i++) {
+	  Electron_Dipole *ptr = s->EDD[i];
+	  if (ptr->blk_T) free_blk_mat_double(ptr->blk_T);
+	  free_complx_vector(ptr->Rmol);
+	  for (ii=0; ii<5; ii++) {
+		  if (ptr->T2q[ii] != NULL) free_double_matrix(ptr->T2q[ii]);
+	  }
+	  free((char*)(ptr));
+  }
+  free(s->EDD);
+
   DEBUGPRINT("SIM_DESTROY 7\n");
   for (i=0; i<s->Nfstart; i++) {
 	  if (s->fstart[i]) free_complx_matrix(s->fstart[i]);
@@ -916,6 +942,12 @@ Sim_wsp * wsp_initialize(Sim_info *s)
 			wsp->HF_Rlab[i] = complx_vector(5);
 		}
 	}
+	wsp->EDD_Rlab = (complx**)malloc(sizeof(complx*)*s->nEDD);
+	wsp->EDD_Rrot = (complx**)malloc(sizeof(complx*)*s->nEDD);
+	for (i=0; i<s->nEDD; i++) {
+		wsp->EDD_Rrot[i] = complx_vector(5);
+		wsp->EDD_Rlab[i] = complx_vector(5);
+	}
 
 	wsp->CS_used = (int*)malloc(sizeof(int)*s->nCS);
 	wsp->DD_used = (int*)malloc(sizeof(int)*s->nDD);
@@ -923,6 +955,8 @@ Sim_wsp * wsp_initialize(Sim_info *s)
 	wsp->Q_used = (int*)malloc(sizeof(int)*s->nQ);
 	wsp->G_used = (int*)malloc(sizeof(int)*s->nG);
 	wsp->HF_used = (int*)malloc(sizeof(int)*s->nHF);
+	wsp->HEx_used = (int*)malloc(sizeof(int)*s->nHEX);
+	wsp->EDD_used = (int*)malloc(sizeof(int)*s->nEDD);
 	wsp->spinused = NULL;
 
 	/* rf channels and offsets */
@@ -1096,6 +1130,10 @@ Sim_wsp * wsp_initialize(Sim_info *s)
     for (i=0; i<s->nG; i++) wsp->G[i] = s->G[i];
     wsp->HF = (Hyperfine **)malloc(s->nHF*sizeof(Hyperfine*));
     for (i=0; i<s->nHF; i++) wsp->HF[i] = s->HF[i];
+    wsp->HEx = (Heisenberg_exchange **)malloc(s->nJ*sizeof(Heisenberg_exchange*));
+    for (i=0; i<s->nHEX; i++) wsp->HEx[i] = s->HEx[i];
+    wsp->EDD = (Electron_Dipole **)malloc(s->nEDD*sizeof(Electron_Dipole*));
+    for (i=0; i<s->nEDD; i++) wsp->EDD[i] = s->EDD[i];
 
     wsp->dw = 1.0e6/s->sw;
 
@@ -1179,6 +1217,14 @@ void wsp_destroy(Sim_info *s, Sim_wsp *wsp)
 	free((char*)(wsp->HF_Rlab));
 	free((char*)(wsp->HF_Rrot));
 	free((char*)(wsp->HF_used));
+	for (i=0; i<s->nEDD; i++) {
+		free_complx_vector(wsp->EDD_Rlab[i]);
+		free_complx_vector(wsp->EDD_Rrot[i]);
+	}
+	free((char*)(wsp->EDD_Rlab));
+	free((char*)(wsp->EDD_Rrot));
+	free((char*)(wsp->EDD_used));
+	free((char*)(wsp->HEx_used));
 
     if (wsp->inhom_offset) free_double_vector(wsp->inhom_offset);
     if (wsp->offset) free_double_vector(wsp->offset);
@@ -1327,6 +1373,21 @@ void wsp_destroy(Sim_info *s, Sim_wsp *wsp)
     	}
     }
     free((char *)(wsp->HF)); wsp->HF = NULL;
+    for (i=0; i<s->nHEX; i++) {
+    	if (wsp->HEx[i] != s->HEx[i]) {
+    		if (wsp->HEx[i]->blk_Tiso != s->HEx[i]->blk_Tiso) free_blk_mat_double(wsp->HEx[i]->blk_Tiso);
+    		free((char *)(wsp->HEx[i]));
+    	}
+    }
+    free((char *)(wsp->HEx)); wsp->HEx = NULL;
+    for (i=0; i<s->nEDD; i++) {
+    	if (wsp->EDD[i] != s->EDD[i]) {
+    		free_complx_vector(wsp->EDD[i]->Rmol);
+    		if (wsp->EDD[i]->blk_T != s->EDD[i]->blk_T) free_blk_mat_double(wsp->EDD[i]->blk_T);
+    		free((char *)(wsp->EDD[i]));
+    	}
+    }
+    free((char *)(wsp->EDD)); wsp->EDD = NULL;
 
     if (wsp->FWTASG_irow != NULL) {
     	free(wsp->FWTASG_irow);
@@ -1371,7 +1432,7 @@ void store_sim_pointers(Tcl_Interp* interp, Sim_info* sim, Sim_wsp * wsp)
 
 void read_sim_pointers(Tcl_Interp* interp, Sim_info **sim, Sim_wsp **wsp)
 {
-	char *buf;
+	const char *buf;
 
 	buf = Tcl_GetVar(interp,"__sim_info_ptr",TCL_GLOBAL_ONLY);
 	if (buf == NULL) {

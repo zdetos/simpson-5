@@ -1858,7 +1858,7 @@ int tclDip2Dist(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
   return TclSetResult(interp,"%g",dist);
 }
 
-int tclGamma(ClientData data,Tcl_Interp* interp,int argc, char *argv[])
+int tclGamma(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
 {
   ISOTOPE* isop;
 
@@ -1866,7 +1866,7 @@ int tclGamma(ClientData data,Tcl_Interp* interp,int argc, char *argv[])
     return TclError(interp,
     "gamma <nuc> : returns the magnetogyric ratio of the nucleus in the unit 10^7 rad/(T s)");
     
-  isop=ss_findisotope(argv[1]);
+  isop=ss_findisotope(Tcl_GetString(argv[1]));
   //sprintf(interp->result,"%g",isop->gamma);
   //return TCL_OK;
   return TclSetResult(interp,"%g",isop->gamma);
@@ -1894,15 +1894,28 @@ int tclResfreq(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
   return TclSetResult(interp, "%g", fabs(isop->gamma/ss_gamma1H()*protonfield));
 }
 
+/* Tcl function that returns the spin of given nucleus */
+int tclNucspin(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
+{
+  ISOTOPE* isop;
+
+  if (argc != 2)
+    return TclError(interp,
+     "nucspin <nuc> : returns the spin of nucleus <nuc>. e.g. 13C or 27Al" );
+
+  isop=ss_findisotope(Tcl_GetString(argv[1]));
+  return TclSetResult(interp, "%g", isop->spin);
+}
+
 void tclcmd_spinsys(Tcl_Interp* interp)
 {
 
   Tcl_CreateObjCommand(interp,"isotopes",(Tcl_ObjCmdProc *)tclIsotopes,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
-  Tcl_CreateCommand(interp,"gamma",(Tcl_CmdProc *)tclGamma,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
+  Tcl_CreateObjCommand(interp,"gamma",(Tcl_ObjCmdProc *)tclGamma,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
   Tcl_CreateObjCommand(interp,"resfreq",(Tcl_ObjCmdProc *)tclResfreq,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
   Tcl_CreateObjCommand(interp,"dist2dip",(Tcl_ObjCmdProc *)tclDist2Dip,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
   Tcl_CreateObjCommand(interp,"dip2dist",(Tcl_ObjCmdProc *)tclDip2Dist,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
-
+  Tcl_CreateObjCommand(interp,"nucspin", (Tcl_ObjCmdProc *)tclNucspin, (ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 }
 
               

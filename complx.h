@@ -43,17 +43,13 @@ typedef struct __complx { double re,im; } complx;
 #define LOG10E 0.434294481903251827651
 
   
-#ifdef __APPLE__
-#define SIMPSON_INLINE
-#else
-#define SIMPSON_INLINE 
-#endif
 
-SIMPSON_INLINE complx Complx(double re,double im);
-SIMPSON_INLINE complx Cadd(complx a,complx b);
-SIMPSON_INLINE complx Cmul(complx a,complx b);
-SIMPSON_INLINE complx Conj(complx z);
-SIMPSON_INLINE complx Cexpi(double im);
+/* No inline functions, let the compiler decide! */
+complx Complx(double re,double im);
+complx Cadd(complx a,complx b);
+complx Cmul(complx a,complx b);
+complx Conj(complx z);
+complx Cexpi(double im);
 
 complx Cneg(complx a);
 complx Csub(complx a,complx b);
@@ -61,7 +57,7 @@ complx Csub(complx a,complx b);
 complx Cdiv(complx a,complx b);
 double  Cabs(complx z);
 complx Csqrt(complx z);
-SIMPSON_INLINE complx RCmul(double x,complx a);
+complx RCmul(double x,complx a);
 complx CRmul(complx a,double x);
 complx Cexp(complx z);
 complx CRexp(double re,double im);

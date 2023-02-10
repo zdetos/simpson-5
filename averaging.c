@@ -267,6 +267,144 @@ void read_averaging_file(Tcl_Interp *interp, Sim_info *sim, Ave_elem **aveptr, d
 		   ave[i].data = (double*)malloc(Nlines*sizeof(double));
 		   continue;
 	   }
+	   if (sscanf(parsv[i],"gtensor_%d_%s",&j,buf) == 2) {
+		   /* gtensor must exist in sim!!! */
+		   if (gtensor_exist(sim,j) < 0) {
+			   fprintf(stderr,"Error reading averaging_file: evaluating '%s' but interaction 'gtensor %d' not properly defined in spinsys\n",parsv[i],j);
+			   exit(1);
+		   }
+		   ave[i].nuc1 = j;
+		   //printf("shift found: %d '%s'\n",ave[i].nuc1,buf);
+		   ave[i].par_type = 5;
+		   ave[i].txt = NULL;
+		   set_ave_val_type(ave,i,buf);
+		   if (ave[i].val_type == 0) {
+			   fprintf(stderr,"Error in reading averaging_file: incorrect parameter '%s'\n",parsv[i]);
+			   exit(1);
+		   }
+		   ave[i].data = (double*)malloc(Nlines*sizeof(double));
+		   continue;
+	   }
+	   if (sscanf(parsv[i],"hyperfine_%d_%d_%s",&j,&k,buf) == 3) {
+		   /* hyperfine must exist in sim!!! */
+		   if (hyperfine_exist(sim,j,k) < 0) {
+			   fprintf(stderr,"Error reading averaging_file: evaluating '%s' but interaction 'hyperfine %d %d' not properly defined in spinsys\n",parsv[i],j,k);
+			   exit(1);
+		   }
+		   if (k<j) {
+			   ave[i].nuc1 = k;
+			   ave[i].nuc2 = j;
+		   } else {
+			   ave[i].nuc1 = j;
+			   ave[i].nuc2 = k;
+		   }
+		   //printf("hyperfine found: %d %d '%s'\n",ave[i].nuc1,ave[i].nuc2,buf);
+		   ave[i].par_type = 6;
+		   ave[i].txt = NULL;
+		   set_ave_val_type(ave,i,buf);
+		   if (ave[i].val_type == 0) {
+			   fprintf(stderr,"Error in reading averaging_file: incorrect parameter '%s'\n",parsv[i]);
+			   exit(1);
+		   }
+		   ave[i].data = (double*)malloc(Nlines*sizeof(double));
+		   continue;
+	   }
+	   if (sscanf(parsv[i],"hyperfine_ave_%d_%d_%s",&j,&k,buf) == 3) {
+		   /* hyperfine must exist in sim!!! */
+		   if (hyperfine_exist(sim,j,k) < 0) {
+			   fprintf(stderr,"Error reading averaging_file: evaluating '%s' but interaction 'hyperfine_ave %d %d' not properly defined in spinsys\n",parsv[i],j,k);
+			   exit(1);
+		   }
+		   if (k<j) {
+			   ave[i].nuc1 = k;
+			   ave[i].nuc2 = j;
+		   } else {
+			   ave[i].nuc1 = j;
+			   ave[i].nuc2 = k;
+		   }
+		   //printf("hyperfine_ave found: %d %d '%s'\n",ave[i].nuc1,ave[i].nuc2,buf);
+		   ave[i].par_type = 6;
+		   ave[i].txt = NULL;
+		   set_ave_val_type(ave,i,buf);
+		   if (ave[i].val_type == 0) {
+			   fprintf(stderr,"Error in reading averaging_file: incorrect parameter '%s'\n",parsv[i]);
+			   exit(1);
+		   }
+		   ave[i].data = (double*)malloc(Nlines*sizeof(double));
+		   continue;
+	   }
+	   if (sscanf(parsv[i],"heisenberg_%d_%d_%s",&j,&k,buf) == 3) {
+		   /* heisenberg must exist in sim!!! */
+		   if (heisenberg_exist(sim,j,k) < 0) {
+			   fprintf(stderr,"Error reading averaging_file: evaluating '%s' but interaction 'heisenberg %d %d' not properly defined in spinsys\n",parsv[i],j,k);
+			   exit(1);
+		   }
+		   if (k<j) {
+			   ave[i].nuc1 = k;
+			   ave[i].nuc2 = j;
+		   } else {
+			   ave[i].nuc1 = j;
+			   ave[i].nuc2 = k;
+		   }
+		   //printf("heisenberg found: %d %d '%s'\n",ave[i].nuc1,ave[i].nuc2,buf);
+		   ave[i].par_type = 7;
+		   ave[i].txt = NULL;
+		   set_ave_val_type(ave,i,buf);
+		   if (ave[i].val_type != 1) {  // it can only be _iso
+			   fprintf(stderr,"Error in reading averaging_file: incorrect parameter '%s'\n",parsv[i]);
+			   exit(1);
+		   }
+		   ave[i].data = (double*)malloc(Nlines*sizeof(double));
+		   continue;
+	   }
+	   if (sscanf(parsv[i],"edipole_%d_%d_%s",&j,&k,buf) == 3) {
+		   /* edipole must exist in sim!!! */
+		   if (edipole_exist(sim,j,k) < 0) {
+			   fprintf(stderr,"Error reading averaging_file: evaluating '%s' but interaction 'edipole %d %d' not properly defined in spinsys\n",parsv[i],j,k);
+			   exit(1);
+		   }
+		   if (k<j) {
+			   ave[i].nuc1 = k;
+			   ave[i].nuc2 = j;
+		   } else {
+			   ave[i].nuc1 = j;
+			   ave[i].nuc2 = k;
+		   }
+		   //printf("edipole found: %d %d '%s'\n",ave[i].nuc1,ave[i].nuc2,buf);
+		   ave[i].par_type = 8;
+		   ave[i].txt = NULL;
+		   set_ave_val_type(ave,i,buf);
+		   if (ave[i].val_type == 0 || ave[i].val_type == 1) {
+			   fprintf(stderr,"Error in reading averaging_file: incorrect parameter '%s'\n",parsv[i]);
+			   exit(1);
+		   }
+		   ave[i].data = (double*)malloc(Nlines*sizeof(double));
+		   continue;
+	   }
+	   if (sscanf(parsv[i],"edipole_ave_%d_%d_%s",&j,&k,buf) == 3) {
+		   /* edipole must exist in sim!!! */
+		   if (edipole_exist(sim,j,k) < 0) {
+			   fprintf(stderr,"Error reading averaging_file: evaluating '%s' but interaction 'edipole_ave %d %d' not properly defined in spinsys\n",parsv[i],j,k);
+			   exit(1);
+		   }
+		   if (k<j) {
+			   ave[i].nuc1 = k;
+			   ave[i].nuc2 = j;
+		   } else {
+			   ave[i].nuc1 = j;
+			   ave[i].nuc2 = k;
+		   }
+		   //printf("edipole_ave found: %d %d '%s'\n",ave[i].nuc1,ave[i].nuc2,buf);
+		   ave[i].par_type = 8;
+		   ave[i].txt = NULL;
+		   set_ave_val_type(ave,i,buf);
+		   if (ave[i].val_type == 0 || ave[i].val_type == 1) {
+			   fprintf(stderr,"Error in reading averaging_file: incorrect parameter '%s'\n",parsv[i]);
+			   exit(1);
+		   }
+		   ave[i].data = (double*)malloc(Nlines*sizeof(double));
+		   continue;
+	   }
 	   /* otherwise it is par(*) */
 	   ave[i].par_type = 0;
 	   ave[i].txt = strdup(parsv[i]);
@@ -450,6 +588,92 @@ void set_averaging_parameters(Sim_info *sim,Sim_wsp *wsp,Ave_elem *ave_struct,in
 			case 6: wsp->Q[j]->pas[2] = ave_struct[i].data[idx]; break;
 			}
 			break; }
+		case 5: { // gtensor
+			j = gtensor_exist(sim,ave_struct[i].nuc1);
+			assert( j >= 0 );
+			if (wsp->G[j] == sim->G[j]) {
+				wsp->G[j] = (Gtensor *)malloc(sizeof(Gtensor));
+				wsp->G[j]->nuc = sim->G[j]->nuc;
+				wsp->G[j]->iso = sim->G[j]->iso;
+				wsp->G[j]->delta = sim->G[j]->delta;
+				wsp->G[j]->eta = sim->G[j]->eta;
+				wsp->G[j]->T = sim->G[j]->T;
+				wsp->G[j]->pas[0] = sim->G[j]->pas[0];
+				wsp->G[j]->pas[1] = sim->G[j]->pas[1];
+				wsp->G[j]->pas[2] = sim->G[j]->pas[2];
+			}
+			switch (ave_struct[i].val_type) {
+			case 1: Niso++; wsp->G[j]->iso = -2.0*M_PI*ave_struct[i].data[idx]; break;
+			case 2: Naniso++; wsp->G[j]->delta = -2.0*M_PI*ave_struct[i].data[idx]; break;
+			case 3: Naniso++; wsp->G[j]->eta = ave_struct[i].data[idx]; break;
+			case 4: wsp->G[j]->pas[0] = ave_struct[i].data[idx]; break;
+			case 5: wsp->G[j]->pas[1] = ave_struct[i].data[idx]; break;
+			case 6: wsp->G[j]->pas[2] = ave_struct[i].data[idx]; break;
+			}
+			break; }
+		case 6: { // hyperfine
+			j = hyperfine_exist(sim,ave_struct[i].nuc1,ave_struct[i].nuc2);
+			assert( j >= 0 );
+			if (wsp->HF[j] == sim->HF[j]) {
+				wsp->HF[j] = (Hyperfine *)malloc(sizeof(Hyperfine));
+				wsp->HF[j]->nuc[0] = sim->HF[j]->nuc[0];
+				wsp->HF[j]->nuc[1] = sim->HF[j]->nuc[1];
+				wsp->HF[j]->iso = sim->HF[j]->iso;
+				wsp->HF[j]->delta = sim->HF[j]->delta;
+				wsp->HF[j]->eta = sim->HF[j]->eta;
+				wsp->HF[j]->pas[0] = sim->HF[j]->pas[0];
+				wsp->HF[j]->pas[1] = sim->HF[j]->pas[1];
+				wsp->HF[j]->pas[2] = sim->HF[j]->pas[2];
+				wsp->HF[j]->blk_Tiso = sim->HF[j]->blk_Tiso;
+				wsp->HF[j]->blk_T = sim->HF[j]->blk_T;
+				wsp->HF[j]->blk_Ta = sim->HF[j]->blk_Ta;
+				wsp->HF[j]->blk_Tb = sim->HF[j]->blk_Tb;
+			}
+			switch (ave_struct[i].val_type) {
+			case 1: Niso++; wsp->HF[j]->iso = 2.0*M_PI*ave_struct[i].data[idx]; break;
+			case 2: Naniso++; wsp->HF[j]->delta = 2.0*M_PI*ave_struct[i].data[idx]; break;
+			case 3: Naniso++; wsp->HF[j]->eta = ave_struct[i].data[idx]; break;
+			case 4: wsp->HF[j]->pas[0] = ave_struct[i].data[idx]; break;
+			case 5: wsp->HF[j]->pas[1] = ave_struct[i].data[idx]; break;
+			case 6: wsp->HF[j]->pas[2] = ave_struct[i].data[idx]; break;
+			}
+			break; }
+		case 7: { // heisenberg
+			j = heisenberg_exist(sim,ave_struct[i].nuc1,ave_struct[i].nuc2);
+			assert( j >= 0 );
+			if (wsp->HEx[j] == sim->HEx[j]) {
+				wsp->HEx[j] = (Heisenberg_exchange *)malloc(sizeof(Heisenberg_exchange));
+				wsp->HEx[j]->electron[0] = sim->HEx[j]->electron[0];
+				wsp->HEx[j]->electron[1] = sim->HEx[j]->electron[1];
+				wsp->HEx[j]->blk_Tiso = sim->HEx[j]->blk_Tiso;
+			}
+			Niso++;
+			wsp->HEx[j]->iso = ave_struct[i].data[idx];
+			break; }
+		case 8: { // edipole
+			j = edipole_exist(sim,ave_struct[i].nuc1,ave_struct[i].nuc2);
+			assert( j >= 0 );
+			if (wsp->EDD[j] == sim->EDD[j]) {
+				wsp->EDD[j] = (Electron_Dipole *)malloc(sizeof(Electron_Dipole));
+				wsp->EDD[j]->electron[0] = sim->EDD[j]->electron[0];
+				wsp->EDD[j]->electron[1] = sim->EDD[j]->electron[1];
+				wsp->EDD[j]->delta = sim->EDD[j]->delta;
+				wsp->EDD[j]->eta = sim->EDD[j]->eta;
+				wsp->EDD[j]->blk_T = sim->EDD[j]->blk_T;
+				wsp->EDD[j]->pas[0] = sim->EDD[j]->pas[0];
+				wsp->EDD[j]->pas[1] = sim->EDD[j]->pas[1];
+				wsp->EDD[j]->pas[2] = sim->EDD[j]->pas[2];
+			}
+			Naniso++;
+			switch (ave_struct[i].val_type) {
+			case 2: wsp->EDD[j]->delta = ave_struct[i].data[idx]; break;
+			case 3: wsp->EDD[j]->eta = ave_struct[i].data[idx]; break;
+			case 4: wsp->EDD[j]->pas[0] = ave_struct[i].data[idx]; break;
+			case 5: wsp->EDD[j]->pas[1] = ave_struct[i].data[idx]; break;
+			case 6: wsp->EDD[j]->pas[2] = ave_struct[i].data[idx]; break;
+			}
+			break; }
+
 		}
 	}
 

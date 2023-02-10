@@ -142,6 +142,37 @@ int hyperfine_exist(Sim_info* s,int n1, int n2)
 	return res;
 }
 
+int heisenberg_exist(Sim_info* s,int n1, int n2)
+{
+	int i, res=-1;
+	for (i=0;i<s->nHEX;i++) {
+		if ( (s->HEx[i]->electron[0] == n1) && (s->HEx[i]->electron[1] == n2) ) {
+			res = i;
+			break;
+		}
+		if ( (s->HEx[i]->electron[0] == n2) && (s->HEx[i]->electron[1] == n1) ) {
+			res = i;
+			break;
+		}
+	}
+	return res;
+}
+
+int edipole_exist(Sim_info* s,int n1, int n2)
+{
+	int i, res=-1;
+	for (i=0;i<s->nEDD;i++) {
+		if ( (s->EDD[i]->electron[0] == n1) && (s->EDD[i]->electron[1] == n2) ) {
+			res = i;
+			break;
+		}
+		if ( (s->EDD[i]->electron[0] == n2) && (s->EDD[i]->electron[1] == n1) ) {
+			res = i;
+			break;
+		}
+	}
+	return res;
+}
 
 /* this can be just wsp variable, set by turnon/turnoff commands */
 int ham_ischanged(Sim_info *s, Sim_wsp *wsp)
@@ -205,13 +236,15 @@ void ham_turnoff(Sim_info *s, Sim_wsp *wsp,char* name)
 	  memset(wsp->J_used,0,sizeof(int)*s->nJ);
 	  memset(wsp->G_used,0,sizeof(int)*s->nG);
 	  memset(wsp->HF_used,0,sizeof(int)*s->nHF);
+	  memset(wsp->EDD_used,0,sizeof(int)*s->nEDD);
+	  memset(wsp->HEx_used,0,sizeof(int)*s->nHEX);
 	  blk_dm_copy(wsp->Hiso_off,wsp->Hiso);
 	  if (s->Hassembly) {
 		  for (i=0; i<5; i++) {
 			  blk_dm_copy(wsp->HQ_off[i],wsp->HQ[i]);
 		  }
 	  }
-	  wsp->Nint_off = s->nCS + s->nDD + s->nQ + s->nJ + s->nG + s->nHF;
+	  wsp->Nint_off = s->nCS + s->nDD + s->nQ + s->nJ + s->nG + s->nHF + s->nHEX + s->nEDD;
      return;
   }
 
@@ -469,6 +502,8 @@ void ham_turnon(Sim_info *s, Sim_wsp *wsp,char* name)
 	  for (i=0; i<s->nJ; i++) wsp->J_used[i] = 1;
 	  for (i=0; i<s->nG; i++) wsp->G_used[i] = 1;
 	  for (i=0; i<s->nHF; i++) wsp->HF_used[i] = 1;
+	  for (i=0; i<s->nHEX; i++) wsp->HEx_used[i] = 1;
+	  for (i=0; i<s->nEDD; i++) wsp->EDD_used[i] = 1;
 	  clear_int_off(s,wsp);
      return;
   }
@@ -730,7 +765,7 @@ void ham_rotate(Sim_info *s, Sim_wsp *wsp)
 			  wig2rot(wsp->DD_Rrot[s->MIX[i]->idx],wsp->DD[s->MIX[i]->idx]->Rmol,d2);
 		  }
 	  }
-	  // NOTE 30.5.2021 - Hassembly is disabled in DNPframe where hyperfine is used, so these lined can be obsolete
+	  // NOTE 30.5.2021 - Hassembly is disabled in DNPframe where hyperfine is used, so these lines can be obsolete
 	  // I do this because I need Rrot for terms T2+-1 that are not included in HQ[]
 	  for (i=0; i<s->nHF; i++) {
 		  if (wsp->HF_Rrot[i] != NULL) wig2rot(wsp->HF_Rrot[i],wsp->HF[i]->Rmol,d2);
@@ -757,6 +792,7 @@ void ham_rotate(Sim_info *s, Sim_wsp *wsp)
 		  if (wsp->HF_Rrot[i] != NULL) wig2rot(wsp->HF_Rrot[i],wsp->HF[i]->Rmol,d2);
 	  }
 	  //DEBUGPRINT("ham_rotate point 8\n");
+	  for (i=0; i<s->nEDD; i++) wig2rot(wsp->EDD_Rrot[i],wsp->EDD[i]->Rmol,d2);
 	  free_complx_matrix(d2);
   }
 }
@@ -832,6 +868,18 @@ void ham_hamilton_labframe(Sim_info *s, Sim_wsp *wsp, mat_complx *d2)
 			fprintf(stderr,"Error: Hyperfine not yet implemented in LABframe");
 			exit(1);
 		}
+		for (i=0; i<s->nEDD; i++) { // electron dipole-dipole is clear
+			if (!wsp->EDD_used[i]) continue;
+			wig2rot(wsp->EDD_Rlab[i],wsp->EDD_Rrot[i],d2);
+			sgn = 1;
+			for (q=0; q<5; q++) {
+				complx z = wsp->EDD_Rlab[i][5-q];
+				z.re *= sgn; z.im *= sgn;
+				cm_multocr(ham,s->EDD[i]->T2q[q], z);
+				sgn *= -1;
+			}
+		}
+
 	}
 }
 
@@ -879,6 +927,13 @@ void ham_hamilton_dnpframe(Sim_info *sim, Sim_wsp *wsp, complx *d20, mat_complx 
 		cblas_zdotu_sub(LEN(d20),zptr1+1,1,zptr2,1,&cdw);
 		//printf("hyperfine +1: (%g, %g)\n",cdw.re, cdw.im);
 		blk_cm_multocr(wsp->Hcplx,wsp->HF[i]->blk_Ta,cdw);
+	}
+	// add electron-electron dipolar part
+	for (i=0; i<sim->nEDD; i++) {
+		if (!wsp->EDD_used[i]) continue;
+		dw = wig20rot(wsp->EDD_Rrot[i],d20);
+		//DEBUGPRINT("ham_hamilton: adding electron dipole %d\n",i);
+		if (fabs(dw) > TINY) blk_dm_multod(wsp->ham_blk,wsp->EDD[i]->blk_T,dw);
 	}
 
 	// wsp->ham_blk will be added in ham_hamilton()
@@ -947,6 +1002,12 @@ void ham_hamilton_rotframe(Sim_info *s, Sim_wsp *wsp, complx *d20, mat_complx *d
 		  dw = wig20rot(wsp->HF_Rrot[i],d20);
 		  //DEBUGPRINT("ham_hamilton: adding ANISO hyperfine T20 %d (dw=%f)\n",i,dw);
 		  if (fabs(dw) > TINY) blk_dm_multod(wsp->ham_blk,wsp->HF[i]->blk_T,dw);
+	  }
+	  for (i=0; i<s->nEDD; i++) {
+		  if (!wsp->EDD_used[i]) continue;
+		  dw = wig20rot(wsp->EDD_Rrot[i],d20);
+		  //DEBUGPRINT("ham_hamilton: adding dipole %d\n",i);
+		  if (fabs(dw) > TINY) blk_dm_multod(wsp->ham_blk,wsp->EDD[i]->blk_T,dw);
 	  }
   }
 
@@ -1062,8 +1123,9 @@ void ham_hamilton(Sim_info *sim, Sim_wsp *wsp)
 				break;
 			case DNPFRAME:
 				if (sim->ss->iso[sim->ss->chan[i][1]]->number == 0) { // it is electron channel
-					printf("ham_hamilton is adding electron offset\n");
+					//printf("ham_hamilton is adding electron offset %f\n",wsp->offset[i]);
 					blk_dm_multod_diag(wsp->ham_blk,wsp->chan_Iz[i],wsp->offset[i]);
+					//dm_print(wsp->chan_Iz[i],"chan Iz");
 				}
 				break;
 			case LABFRAME:

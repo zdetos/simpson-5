@@ -128,9 +128,9 @@ void readsys(Tcl_Interp* interp,Sim_info* s)
 {
   SpinSys* ss;
   int ver, Nnuc, Nchan, Nelm, NN, i, j, n1, n2, Jiso, Jani;
-  int Nshift=0, Nj=0, Ndip=0, Nquad=0, Nmix=0, Ngten=0, Nhf=0, Naniso;
-  char *buf, **names, **spins;
-  const char *bufc; //changeable pointer to unchangeable char
+  int Nshift=0, Nj=0, Ndip=0, Nquad=0, Nmix=0, Ngten=0, Nhf=0, Nhex=0, Nedd=0, Naniso;
+  char *buf;
+  const char **names, **spins; //changeable pointer to unchangeable char
   Tcl_Obj **vals;
   Shift *csptr;
   Dipole *ddptr;
@@ -139,6 +139,8 @@ void readsys(Tcl_Interp* interp,Sim_info* s)
   Mixing *mptr;
   Gtensor *gptr;
   Hyperfine *hfptr;
+  Heisenberg_exchange *hexptr;
+  Electron_Dipole *eddptr;
   double data[8];
   int *spin_code, *mzmap=NULL, *permvec, Nmz, reps, mzpos, Ival, Icur, c_ini, n_c, Nblk, *blk_dims=NULL;
   int Hiso_isdiag, HQ_isdiag, Nbasis;
@@ -209,6 +211,7 @@ void readsys(Tcl_Interp* interp,Sim_info* s)
 	  }
 	  // rf channel frequency taken from the first nucleus on that channel
 	  ss->chanfreq[i] = ss_larmor_frequency(s,ss->chan[i][1]);
+
   }
 
   /* gather info for Hamiltonian block diagonalization */
@@ -469,7 +472,7 @@ void readsys(Tcl_Interp* interp,Sim_info* s)
     		 printf(" nucleus(%d,%d%s)",ss->chan[i][j],ss->iso[ss->chan[i][j]]->number,ss->iso[ss->chan[i][j]]->name);
     	 }
       }
-      printf(", carrier frequency %f\n",ss->chanfreq[i]);
+      printf(", carrier frequency %.2f Hz\n",ss->chanfreq[i]/2/M_PI);
     }
   }
 
@@ -515,6 +518,14 @@ void readsys(Tcl_Interp* interp,Sim_info* s)
     	Nhf++;
     	continue;
     }
+    if (!strncmp(names[i],"heisenberg",10)) {
+    	Nhex++;
+    	continue;
+    }
+    if (!strncmp(names[i],"edipole",7)) {
+    	Nedd++;
+    	continue;
+    }
   }
   if ( (s->frame == LABFRAME) || (s->frame == DNPFRAME) ) {
 	  Nshift = ss->nspins; // all spins need Larmor frequency added to isotropic shift
@@ -533,6 +544,11 @@ void readsys(Tcl_Interp* interp,Sim_info* s)
   s->nG = 0;
   s->HF = (Hyperfine**)malloc(Nhf*sizeof(Hyperfine*));
   s->nHF = 0;
+  s->HEx = (Heisenberg_exchange**)malloc(Nhex*sizeof(Heisenberg_exchange*));
+  s->nHEX = 0;
+  s->EDD = (Electron_Dipole**)malloc(Nhex*sizeof(Electron_Dipole*));
+  s->nEDD = 0;
+
 
   s->matdim = ss->matdim;
   s->Hint_isdiag = 1;
@@ -1010,9 +1026,131 @@ void readsys(Tcl_Interp* interp,Sim_info* s)
         }
     	continue;
     }
+    if (!strncmp(names[i],"heisenberg",10)) {
+    	if (NN != 3) {
+    		fprintf(stderr,"Error: reading heisenberg - parameter count mismatch\n");
+    		exit(1);
+    	}
+    	if (Tcl_GetIntFromObj(interp,vals[0],&n1) != TCL_OK) {
+    		fprintf(stderr,"Error: readsys - heisenberg - int conversion failure (1)\n");
+    		exit(1);
+    	}
+    	if (Tcl_GetIntFromObj(interp,vals[1],&n2) != TCL_OK) {
+    		fprintf(stderr,"Error: readsys - heisenberg - int conversion failure (2)\n");
+    		exit(1);
+    	}
+    	if (n1 < 1 || n1 > ss->nspins) {
+    		fprintf(stderr,"Error: readsys: heisenberg %d %d - first index out of defined range of spins\n",n1,n2);
+    		exit(1);
+    	}
+    	if (n2 < 1 || n2 > ss->nspins) {
+    		fprintf(stderr,"Error: readsys: heisenberg %d %d - second index out of defined range of spins\n",n1,n2);
+    		exit(1);
+    	}
+    	/* if not electrons, throw an error */
+    	if ( (ss->iso[n1]->number != 0) || (ss->iso[n2]->number !=0) ) {
+    		fprintf(stderr,"Error: heisenberg %d %d can be defined for electron spins only\n",n1,n2);
+    		exit(1);
+    	}
+    	if (heisenberg_exist(s,n1,n2) >= 0) {
+    		fprintf(stderr,"Error: readsys: heisenberg %d %d  already exists\n",n1,n2);
+    		exit(1);
+    	}
+   		if (Tcl_GetDoubleFromObj(interp,vals[2],&(data[0])) != TCL_OK) {
+   			fprintf(stderr,"Error: readsys - heisenberg %d %d - double conversion failure\n",n1,n2);
+   			exit(1);
+    	}
+    	if (fabs(data[0]) < TINY) continue;
+    	s->HEx[(s->nHEX)++] = hexptr = (Heisenberg_exchange*)malloc(sizeof(Heisenberg_exchange));
+    	if (n1 < n2) {
+    		hexptr->electron[0] = n1; hexptr->electron[1] = n2;
+    	} else {
+    		hexptr->electron[0] = n2; hexptr->electron[1] = n1;
+    	}
+    	hexptr->iso = data[0]*2.0*M_PI;
+    	hexptr->blk_Tiso = NULL;
+    	// we are sure that both n1 and n2 are electrons and this interaction is isotropic
+    	Hiso_isdiag = 0;
+   		s->Hint_isdiag = 0;
+        if (ver) {
+          printf( "Heisenberg exchange interaction between electrons %d and %d\n",n1,n2);
+          printf( "  isotropic value        : %g Hz\n",hexptr->iso/2.0/M_PI);
+        }
+    	continue;
+    }
+    if (!strncmp(names[i],"edipole",7)) {
+    	if (NN != 6 && NN != 7) {
+    		fprintf(stderr,"Error: reading edipole - parameter count mismatch\n");
+    		exit(1);
+    	}
+    	if (Tcl_GetIntFromObj(interp,vals[0],&n1) != TCL_OK) {
+    		fprintf(stderr,"Error: readsys - edipole - int conversion failure 1\n");
+    		exit(1);
+    	}
+    	if (Tcl_GetIntFromObj(interp,vals[1],&n2) != TCL_OK) {
+    		fprintf(stderr,"Error: readsys - edipole - int conversion failure 2\n");
+    		exit(1);
+    	}
+    	if (n1 < 1 || n1 > ss->nspins || n2 < 1 || n2 > ss->nspins) {
+    		fprintf(stderr,"Error: readsys: edipole %d %d out of defined range of spins\n",n1,n2);
+    		exit(1);
+    	}
+    	/* if not electrons, throw an error */
+    	if ( (ss->iso[n1]->number != 0) || (ss->iso[n2]->number != 0) ) {
+    		fprintf(stderr,"Error: edipole %d %d can be defined for electron spins only\n",n1,n2);
+    		exit(1);
+    	}
+    	if (edipole_exist(s,n1,n2) >=0 ) {
+    		fprintf(stderr,"Error: readsys: edipole %d %d already exists \n",n1, n2);
+    		exit(1);
+    	}
+    	for (j=2; j<NN; j++) {
+    		if (Tcl_GetDoubleFromObj(interp,vals[j],&(data[j-2])) != TCL_OK) {
+    			fprintf(stderr,"Error: readsys - edipole - double conversion failure %d\n",j);
+    			exit(1);
+    		}
+    	}
+    	if (fabs(data[0]) < TINY) continue;
+    	s->EDD[(s->nEDD)++] = eddptr = (Electron_Dipole*)malloc(sizeof(Electron_Dipole));
+    	if (n1 < n2) {
+    		eddptr->electron[0] = n1; eddptr->electron[1] = n2;
+    	} else {
+    		eddptr->electron[0] = n2; eddptr->electron[1] = n1;
+    	}
+    	eddptr->delta = data[0];
+    	if (NN == 6) {
+    		eddptr->eta = 0.0; eddptr->pas[0] = data[1]; eddptr->pas[1] = data[2]; eddptr->pas[2] = data[3];
+    	} else {
+    		assert(NN==7);
+    		eddptr->eta = data[1]; eddptr->pas[0] = data[2]; eddptr->pas[1] = data[3]; eddptr->pas[2] = data[4];
+    	}
+    	// we are sure both n1 and n2 are electrons
+   		HQ_isdiag = 0;
+   		s->Hint_isdiag = 0;
+    	eddptr->blk_T = NULL;
+    	eddptr->T2q[0] = eddptr->T2q[1] = eddptr->T2q[2] = eddptr->T2q[3] = eddptr->T2q[4] = NULL;
+    	Naniso++;
+        if (ver) {
+          printf( "Dipolar coupling between electrons %d and %d \n",n1,n2);
+          printf( "  dipolar coupling       : %g Hz\n",eddptr->delta);
+          if (NN==7) printf("  effective asymmetry    : %g Hz\n",eddptr->eta);
+          printf( "  euler angles of tensor :  (%g,%g,%g) degrees\n",eddptr->pas[0],eddptr->pas[1],eddptr->pas[2]);
+        }
+        if (s->dipole_check) {
+          if (eddptr->delta < 0.0 ) {
+            fprintf(stderr,"error: the dipolar coupling between electrons %d and %d must be positive to comply\n"
+                           "       to the conventions used in this program. Set 'dipole_check' to 'false' to\n"
+                           "       override this sign check.\n",n1,n2);
+            exit(1);
+          }
+        }
+    	eddptr->Rmol = Dtensor2(4.0*M_PI*eddptr->delta, eddptr->eta);
+    	eddptr->Rmol = wig2roti(eddptr->Rmol, eddptr->pas[0], eddptr->pas[1], eddptr->pas[2]);
+    	continue;
+    }
     fprintf(stderr,"Error: unknown identifier '%s' in spinsys, must be one of\n",names[i]);
     fprintf(stderr,"       channels, nuclei, shift, dipole, jcoupling, quadrupole,\n");
-    fprintf(stderr,"       gtensor, hyperfine, or mixing.\n");
+    fprintf(stderr,"       gtensor, hyperfine, heisenberg, edipole or mixing.\n");
     exit(1);
   }
   if ( (s->frame == LABFRAME) || (s->frame == DNPFRAME) ) { // add Zeeman terms to nuclear shifts
@@ -1112,10 +1250,10 @@ void readsys(Tcl_Interp* interp,Sim_info* s)
 				  free_double_matrix(csptr->T);
 				  csptr->T = NULL;
 			  }
-			  printf("CSA of nucleus %d - frame is %d\n",csptr->nuc, s->frame);
+			  //printf("CSA of nucleus %d - frame is %d\n",csptr->nuc, s->frame);
 			  if ( (s->frame == LABFRAME) || (s->frame == DNPFRAME) ) {
 				  // shift is for nuclei only
-				  printf("  adding T2q tensors\n");
+				  //printf("  adding T2q tensors\n");
 				  csptr->T2q[0] = csptr->T2q[4] = NULL; // T2-2 and T22 are zero for CSA
 				  csptr->T2q[1] = Im_real(s,csptr->nuc); dm_muld(csptr->T2q[1],0.5);
 				  csptr->T2q[2] = csptr->T; csptr->T = NULL; dm_muld(csptr->T2q[2],sqrt(2.0/3.0));
@@ -1370,6 +1508,50 @@ void readsys(Tcl_Interp* interp,Sim_info* s)
 		  }
 		  hfptr->T2q[0] = hfptr->T2q[1] = hfptr->T2q[2] = hfptr->T2q[3] = hfptr->T2q[4] = NULL;
 	  }
+	  // Heisenberg exchange for electrons
+	  for (i=0; i<s->nHEX; i++) {
+		  hexptr = s->HEx[i];
+		  n1 = hexptr->electron[0]; n2 = hexptr->electron[1];
+		  if (fabs(hexptr->iso)> TINY) {
+			  // we know it is homo-spin
+			  hexptr->blk_Tiso = II(s,n1,n2);
+			  blk_dm_multod(s->Hiso,hexptr->blk_Tiso,hexptr->iso);
+			  free_blk_mat_double(hexptr->blk_Tiso);
+			  hexptr->blk_Tiso = NULL;
+			  // jak je to s turnoff???
+		  }
+	  }
+	  // Dipole-dipole for electrons
+	  for (i=0; i<s->nEDD; i++) {
+		  eddptr = s->EDD[i];
+		  n1 = eddptr->electron[0]; n2 = eddptr->electron[1];
+		  //printf("creating dipole %d %d \n",n1,n2);
+		  eddptr->blk_T = T20(s,n1,n2);
+		  if (s->Hassembly) {
+			  blk_dm_multod(s->HQ[0],eddptr->blk_T,eddptr->Rmol[3].re);
+			  blk_dm_multod(s->HQ[1],eddptr->blk_T,eddptr->Rmol[4].re);
+			  blk_dm_multod(s->HQ[2],eddptr->blk_T,eddptr->Rmol[4].im);
+			  blk_dm_multod(s->HQ[3],eddptr->blk_T,eddptr->Rmol[5].re);
+			  blk_dm_multod(s->HQ[4],eddptr->blk_T,eddptr->Rmol[5].im);
+			  free_blk_mat_double(eddptr->blk_T);
+			  eddptr->blk_T = NULL;
+		  }
+		  if ( s->frame == LABFRAME ) {
+			  // edipole is defined for electrons only
+			  mat_double *md1, *md2, *md3, *md4;
+			  md1 = Im_real(s,n1); md2 = Im_real(s,n2); md3 = Iz_ham(s,n2);
+			  eddptr->T2q[0] = dm_mul(md1,md2); dm_muld(eddptr->T2q[0],0.5);
+			  eddptr->T2q[1] = Iz_ham(s,n1); dm_multo(eddptr->T2q[1],md2); dm_mm(0.5,md1,md3,0.5,eddptr->T2q[1]);
+			  eddptr->T2q[2] = Iz_ham(s,n1); dm_multo(eddptr->T2q[2],md3);
+			  md4 = Ip_real(s,n2); dm_mm(-0.5,md1,md4,2.0,eddptr->T2q[2]);
+			  free_double_matrix(md1); md1 = Ip_real(s,n1); dm_mm(-0.5/sqrt(6.0),md1,md2,1.0/sqrt(6.0),eddptr->T2q[2]);
+			  eddptr->T2q[3] = Iz_ham(s,n1); dm_multo(eddptr->T2q[3],md4); dm_mm(-0.5,md1,md3,-0.5,eddptr->T2q[3]);
+			  eddptr->T2q[4] = dm_mul(md1,md4); dm_muld(eddptr->T2q[4],0.5);
+			  free_double_matrix(md1); free_double_matrix(md2); free_double_matrix(md3); free_double_matrix(md4);
+		  } else {
+			  eddptr->T2q[0] = eddptr->T2q[1] = eddptr->T2q[2] = eddptr->T2q[3] = eddptr->T2q[4] = NULL;
+		  }
+	  }
 
 	  // end of common Hamiltonian creation
 
@@ -1391,6 +1573,9 @@ void readsys(Tcl_Interp* interp,Sim_info* s)
 	  }
 	  if (s->frame == LABFRAME) {
 		  printf("Simulation will be carried on in laboratory frame.\n");
+	  }
+	  if (s->frame == DNPFRAME) {
+		  printf("Simulation will be carried on in DNP frame (electron rotating frame and laboratory frame for nuclear interactions).\n");
 	  }
   }
 

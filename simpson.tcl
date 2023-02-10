@@ -105,7 +105,11 @@ setvar ssnam {
   dipole N N aniso alpha beta gamma
   dipole_ave N N aniso eta alpha beta gamma
   gtensor N iso aniso eta alpha beta gamma
-  hyperfine N N iso aniso eta alpha beta gamma
+  hyperfine N N iso aniso alpha beta gamma
+  hyperfine_ave N N iso aniso eta alpha beta gamma
+  heisenberg N N iso 
+  edipole N N aniso alpha beta gamma
+  edipole_ave N N aniso eta alpha beta gamma
   mixing N N
 }
 
@@ -297,7 +301,7 @@ proc spinsys_resolve { { fitval {} } } {
 proc spinsys { data } {
   global spinsys
 
-  set okpar { channels nuclei dipole quadrupole shift jcoupling mixing dipole_ave gtensor hyperfine}
+  set okpar { channels nuclei dipole quadrupole shift jcoupling mixing dipole_ave gtensor hyperfine heisenberg edipole edipole_ave}
 
   set data [split $data "\n"]
   foreach lst $data {

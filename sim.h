@@ -90,6 +90,20 @@ typedef struct _Hyperfine {
 	mat_double *T2q[5];
 } Hyperfine;
 
+typedef struct _Heisenberg_exchange {
+	int electron[2];
+	double iso;
+	blk_mat_double *blk_Tiso;
+} Heisenberg_exchange;
+
+typedef struct _Electron_Dipole {
+	int electron[2];
+	double delta, eta, pas[3];
+	blk_mat_double *blk_T;
+	complx *Rmol;
+	mat_double *T2q[5];
+} Electron_Dipole;
+
 //typedef struct _Perms {
 //	int *permvec;
 //	int *dims;
@@ -107,7 +121,9 @@ typedef struct _Sim_info {
   Mixing **MIX;
   Gtensor **G;
   Hyperfine **HF;
-  int nCS, nDD, nJ, nQ, nMIX, nG, nHF;
+  Heisenberg_exchange **HEx;
+  Electron_Dipole **EDD;
+  int nCS, nDD, nJ, nQ, nMIX, nG, nHF, nHEX, nEDD;
   double specfreq, Bzero, wr, sw, sw1, brl, gamma_zero;
   int np, ni, ntot, ngamma, matdim, *obs_nuc, imethod, crystfile_from, crystfile_to;
   char crystfile[256],rfproffile[256],pulsename[64],parname[256],targetcrystfile[256];
@@ -168,7 +184,8 @@ typedef struct _Sim_wsp {
     complx **J_Rrot, **J_Rlab;
     complx **G_Rrot, **G_Rlab;
     complx **HF_Rrot, **HF_Rlab;
-    int *CS_used, *DD_used, *Q_used, *J_used, *G_used, *HF_used, *spinused;
+    complx **EDD_Rrot, **EDD_Rlab;
+    int *CS_used, *DD_used, *Q_used, *J_used, *G_used, *HF_used, *HEx_used, *EDD_used, *spinused;
     blk_mat_complx *STO[ACQBLOCK_STO_END];
     mat_complx *matrix[ACQBLOCK_STO_END];
     double   STO_tproplength_usec[ACQBLOCK_STO_END], STO_tpropstart_usec[ACQBLOCK_STO_END], STO_brl[ACQBLOCK_STO_END];
@@ -199,6 +216,8 @@ typedef struct _Sim_wsp {
     Quadrupole **Q;
     Gtensor **G;
     Hyperfine **HF;
+    Heisenberg_exchange **HEx;
+    Electron_Dipole **EDD;
     int thread_id, cryst_idx, ig, rf_idx;
     int *FWTASG_irow, *FWTASG_icol;
     double dw;

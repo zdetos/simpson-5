@@ -62,6 +62,19 @@ typedef union {
 #define FLOATBITS_EXPADD	0x7f
 #define FLOATBITS_MANT    23
 
+void double_to_bits(double fd, char *bits) {
+   float f = 0;
+
+   if ((fd > __FLT_MIN__ && fd < __FLT_MAX__) || (-fd > __FLT_MIN__ && -fd < __FLT_MAX__)) {
+      f = (float)fd;
+   } else if (fd > __FLT_MAX__) {
+	  f = __FLT_MAX__;
+   } else if (-fd > __FLT_MAX__) {
+	   f = -__FLT_MAX__;
+   }
+   float_to_bits(f, bits);
+}
+
 void float_to_bits(float f,char* bits)
 {
    int e;
@@ -297,7 +310,8 @@ void FD_write(char* fname,FD* fd,int format,int prec)
        pack_begin(fp);
        for (i=0;i<doubles;i++) {
          int j;         
-         float_to_bits(data[i],bits);
+         //float_to_bits(data[i],bits);   <--- BUG when saving double as binary float
+         double_to_bits(data[i],bits);
          for (j=0;j<4;j++) {
            if (pack_putc(bits[j],fp) == EOF) {
              fprintf(stderr,"error: FD_write: cannot write float %d\n",i);
@@ -1876,7 +1890,7 @@ FD* FD_read_nmrpipe(char* fname)
     if (fd->sfrq1 != 0) fd->ref1 *= fd->sfrq1;
     if (type != (int)getpipeval(fname, "NDFTFLAG", 2)) {
       fprintf(stderr, "FD_read_nmrpipe: all dimensions must time or frequency\n");
-      exit(0);
+      exit(1);
     }
   }
 

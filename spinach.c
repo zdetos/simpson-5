@@ -709,6 +709,10 @@ void spinach_pulse_simple(Sim_info *sim, Sim_wsp *wsp,double duration,complx *rh
  */
 void spinach_pulse(Sim_info *sim,Sim_wsp *wsp,double duration)
 {
+	fprintf(stderr,"stop in spinach_pulse()\n");
+	exit(1);
+	/**** Disabled due to errors in compilation 18.9.2024, ZT
+
 	int Nchan_active, Nsub, **sub_idx, temp_curr_nsig, temp_Nacq, n, i, j;
 	mat_double *Lmask;
 	mat_complx *temp_sigma;
@@ -721,17 +725,17 @@ void spinach_pulse(Sim_info *sim,Sim_wsp *wsp,double duration)
 		if (wsp->Nacq == 0) return;
 	}
 
-	/* set up sumHrf matrix and see if there is any RF */
+	// set up sumHrf matrix and see if there is any RF
 	Nchan_active = _setrfprop(sim,wsp);
 	if (Nchan_active == 0) {
 		spinach_delay(sim,wsp,duration);
 		return;
 	}
 
-	/* decide on using subspaces */
+	// decide on using subspaces
 	if (wsp->spinach_pulse_Nsub == 0 ) {
 		if (Nchan_active < sim->ss->nchan) {
-			/* there is good chance to get smaller matrices using path tracing */
+			// there is good chance to get smaller matrices using path tracing
 			Lmask = pick_liou_pulse_mask(sim,wsp);
 			path_tracing(Lmask->row,Lmask->irow,Lmask->icol,&Nsub,&sub_idx);
 			free_double_matrix(Lmask);
@@ -745,17 +749,17 @@ void spinach_pulse(Sim_info *sim,Sim_wsp *wsp,double duration)
 		sub_idx = wsp->spinach_pulse_sub_idx;
 	}
 
-		/* test print out *
-		for (i=1; i<=Nsub; i++) {
-			printf("\nSubspace %d/%d, dim=%d\n\telements:",i,Nsub,LEN(sub_idx[i]));
-			for (j=1; j<=LEN(sub_idx[i]); j++) {
-				printf(" %d",sub_idx[i][j]);
-			}
-		}
-		printf("\n");
-		**************/
+		// test print out
+		//for (i=1; i<=Nsub; i++) {
+		//	printf("\nSubspace %d/%d, dim=%d\n\telements:",i,Nsub,LEN(sub_idx[i]));
+		//	for (j=1; j<=LEN(sub_idx[i]); j++) {
+		//		printf(" %d",sub_idx[i][j]);
+		//	}
+		//}
+		//printf("\n");
 
-	/* generate complex RF hamiltonian (includes pulse phase) */
+
+	// generate complex RF hamiltonian (includes pulse phase)
 	Hrf = ham_rf(wsp);
 
 	if (Nsub > 0) {
@@ -780,7 +784,7 @@ void spinach_pulse(Sim_info *sim,Sim_wsp *wsp,double duration)
 				wsp->Nacq = temp_Nacq;
 				wsp->acqblock_t0 = temp_curr_acqblock_t0;
 				if ( fabs(wsp->t - wsp->acqblock_t0) > TINY ) {
-					/* there was some previous event not synchronized with dw */
+					// there was some previous event not synchronized with dw
 					dt = wsp->dw - (wsp->t - wsp->acqblock_t0);
 					if ( duration < dt) {
 						spinach_pulse_simple(sim,wsp,duration,rho,sub_idx[i],Hrf);
@@ -789,7 +793,7 @@ void spinach_pulse(Sim_info *sim,Sim_wsp *wsp,double duration)
 						spinach_pulse_simple(sim,wsp,dt,rho,sub_idx[i],Hrf);
 						t_tmp = duration - dt;
 					}
-					/* did it fill time up to dw? */
+					// did it fill time up to dw?
 					if (fabs(wsp->t - wsp->acqblock_t0 - wsp->dw) < TINY ) {
 						spinach_point_acq_partial(sim,wsp,rho,detect);
 						wsp->acqblock_t0 = wsp->t;
@@ -816,28 +820,28 @@ void spinach_pulse(Sim_info *sim,Sim_wsp *wsp,double duration)
 						if (wsp->Nacq == 0) break;
 					}
 					if (dt > TINY && wsp->Nacq > 0) {
-						/* remaining time not synchronized with dw */
+						// remaining time not synchronized with dw
 						spinach_pulse_simple(sim,wsp,dt,rho,sub_idx[i],Hrf);
 					}
 				}
 				free_complx_vector(detect);
 			} else {
-				/* just evolve */
+				// just evolve
 				wsp->t = temp_curr_time;
 				spinach_pulse_simple(sim,wsp,duration,rho,sub_idx[i],Hrf);
 			}
-			/* update resulting density matrix wsp->sigma */
+			// update resulting density matrix wsp->sigma
 			sigma_update_partial(wsp->sigma,sub_idx[i],rho);
 			free_complx_vector(rho);
 		}
 		free_complx_matrix(temp_sigma);
 	} else {
-		/* need to do full space evolution */
+		// need to do full space evolution
 		rho = get_sigma(wsp->sigma,0);
 		if (wsp->evalmode == EM_ACQBLOCK) {
 			detect = get_sigma(wsp->fdetect,!(sim->acq_adjoint));
 			if ( fabs(wsp->t - wsp->acqblock_t0) > TINY ) {
-				/* there was some previous event not synchronized with dw */
+				// there was some previous event not synchronized with dw
 				dt = wsp->dw - (wsp->t - wsp->acqblock_t0);
 				if ( duration < dt) {
 					spinach_pulse_simple(sim,wsp,duration,rho,NULL,Hrf);
@@ -846,7 +850,7 @@ void spinach_pulse(Sim_info *sim,Sim_wsp *wsp,double duration)
 					spinach_pulse_simple(sim,wsp,dt,rho,NULL,Hrf);
 					t_tmp = duration - dt;
 				}
-				/* did it fill time up to dw? */
+				// did it fill time up to dw?
 				if (fabs(wsp->t - wsp->acqblock_t0 - wsp->dw) < TINY ) {
 					spinach_point_acq_partial(sim,wsp,rho,detect);
 					wsp->acqblock_t0 = wsp->t;
@@ -879,7 +883,7 @@ void spinach_pulse(Sim_info *sim,Sim_wsp *wsp,double duration)
 					}
 				}
 				if (dt > TINY) {
-					/* remaining time not synchronized with dw */
+					// remaining time not synchronized with dw
 					spinach_pulse_simple(sim,wsp,dt,rho,NULL,Hrf);
 				}
 			}
@@ -887,18 +891,20 @@ void spinach_pulse(Sim_info *sim,Sim_wsp *wsp,double duration)
 		} else {
 			spinach_pulse_simple(sim,wsp,duration,rho,NULL,Hrf);
 		}
-		/* update wsp->sigma */
+		// update wsp->sigma
 		sigma_update_full(wsp->sigma,rho);
 		free_complx_vector(rho);
 	}
 
 	free_blk_mat_complx(Hrf);
-	/* do not remember subspaces if they were not known previously */
+	// do not remember subspaces if they were not known previously
 	if (wsp->spinach_pulse_Nsub != Nsub ) {
 		for (i=1; i<=Nsub; i++) free_int_vector(sub_idx[i]);
 		free(sub_idx);
 	}
 	if (verb) printf("spinach_pulse: ---> DONE <---\n");
+
+	*********** End of function */
 }
 
 void spinach_delay_simple(Sim_info *sim,Sim_wsp *wsp,double duration, complx *rho, mat_double *Liou, mat_complx *Prop,int *idx)
@@ -924,6 +930,9 @@ void spinach_delay_simple(Sim_info *sim,Sim_wsp *wsp,double duration, complx *rh
 
 void spinach_delay(Sim_info *sim,Sim_wsp *wsp,double duration)
 {
+	fprintf(stderr,"stop in spinach_delay()\n");
+	exit(1);
+	/**** Disabler for errors in compilation 18.9.2024 ZT
 	mat_double *L, *Liou;
 	int i, j, n, Nsub, **sub_idx, temp_curr_nsig, temp_Nacq, subdim, analyze_fdetect;
 	complx *rho, *detect;
@@ -946,14 +955,14 @@ void spinach_delay(Sim_info *sim,Sim_wsp *wsp,double duration)
 	if (wsp->spinach_delay_Nsub == 0) {
 		L = pick_liou_ints_mask(sim,wsp);
 		//dm_print(L,"final Liou-mask");
-		/* do path tracing */
+		/// do path tracing
 		path_tracing(L->row,L->irow,L->icol,&(wsp->spinach_delay_Nsub),&(wsp->spinach_delay_sub_idx));
 		free_double_matrix(L);
 		if (verb) printf("spinach_delay: fresh new path tracing of delay evolution <---\n");
 	}
 	Nsub = wsp->spinach_delay_Nsub;
 	sub_idx = wsp->spinach_delay_sub_idx;
-
+	*********************** 18.092024 ZT */
 		/* test print out */
 	/*	for (i=1; i<=Nsub; i++) {
 			printf("\nSubspace %d, dim=%d\n\telements:",i,LEN(sub_idx[i]));
@@ -970,6 +979,7 @@ void spinach_delay(Sim_info *sim,Sim_wsp *wsp,double duration)
 		}
 	*/
 
+	/*********** 18.092024 ZT
 	temp_curr_nsig = wsp->curr_nsig;
 	temp_Nacq = wsp->Nacq;
 	temp_curr_time = wsp->t;
@@ -977,7 +987,7 @@ void spinach_delay(Sim_info *sim,Sim_wsp *wsp,double duration)
 	temp_sigma = cm_dup(wsp->sigma);
 	cm_zero(wsp->sigma);
 
-	/* do calculation only in relevant subspaces (= those with non-zero state vector) */
+	// do calculation only in relevant subspaces (= those with non-zero state vector)
 	analyze_fdetect = (wsp->dw*wsp->Nacq <= duration) ? 1 : 0;
 	//printf("\n++++  %f vs %f ++++\n",sim->dw*wsp->Nacq,duration);
 	if (verb) printf("spinach_delay: fdetect will%s be analyzed",analyze_fdetect ? "" : " not");
@@ -1007,7 +1017,7 @@ void spinach_delay(Sim_info *sim,Sim_wsp *wsp,double duration)
 			Prop = complx_matrix(subdim,subdim,MAT_DENSE,0,0);
 			Liou = double_matrix(subdim,subdim,MAT_DENSE,0,0);
 			if ( fabs(wsp->t - wsp->acqblock_t0) > TINY ) {
-				/* there was some previous event not synchronized with dw */
+				// there was some previous event not synchronized with dw
 				dt = wsp->dw - (wsp->t - wsp->acqblock_t0);
 				if ( duration < dt) {
 					spinach_delay_simple(sim,wsp,duration,rho,Liou,Prop,sub_idx[i]);
@@ -1016,7 +1026,7 @@ void spinach_delay(Sim_info *sim,Sim_wsp *wsp,double duration)
 					spinach_delay_simple(sim,wsp,dt,rho,Liou,Prop,sub_idx[i]);
 					t_tmp = duration - dt;
 				}
-				/* did it fill time up to dw? */
+				// did it fill time up to dw?
 				if (fabs(wsp->t - wsp->acqblock_t0 - wsp->dw) < TINY ) {
 					spinach_point_acq_partial(sim,wsp,rho,detect);
 					(wsp->Nacq)--;
@@ -1036,7 +1046,7 @@ void spinach_delay(Sim_info *sim,Sim_wsp *wsp,double duration)
 				n = (int)floor(t_tmp/wsp->dw+1e-6);
 				dt = t_tmp - wsp->dw*(double)n;
 				if (sim->wr <TINY) {
-					/* static case, can re-use dwelltime propagator */
+					// static case, can re-use dwelltime propagator
 					if (n > 0) {
 						spinach_delay_simple(sim,wsp,wsp->dw,rho,Liou,Prop,sub_idx[i]);
 						spinach_point_acq_partial(sim,wsp,rho,detect);
@@ -1051,7 +1061,7 @@ void spinach_delay(Sim_info *sim,Sim_wsp *wsp,double duration)
 							continue;
 						}
 						for (j=2; j<=n; j++) {
-							/* apply prop to rho */
+							// apply prop to rho
 							cv_matmulto(rho,Prop);
 							wsp->t += wsp->dw;;
 							spinach_point_acq_partial(sim,wsp,rho,detect);
@@ -1072,7 +1082,7 @@ void spinach_delay(Sim_info *sim,Sim_wsp *wsp,double duration)
 					}
 				}
 				if (dt > TINY && wsp->Nacq > 0) {
-					/* remaining time not synchronized with dw */
+					// remaining time not synchronized with dw
 					spinach_delay_simple(sim,wsp,dt,rho,Liou,Prop,sub_idx[i]);
 				}
 			}
@@ -1081,7 +1091,7 @@ void spinach_delay(Sim_info *sim,Sim_wsp *wsp,double duration)
 			free_complx_vector(detect);
 		} else {
 			if (verb) printf("Subspace %d (dim=%d) will be retained\n",i,subdim);
-			/* just evolve */
+			// just evolve
 			wsp->t = temp_curr_time;
 			Prop = complx_matrix(subdim,subdim,MAT_DENSE,0,0);
 			Liou = double_matrix(subdim,subdim,MAT_DENSE,0,0);
@@ -1089,19 +1099,25 @@ void spinach_delay(Sim_info *sim,Sim_wsp *wsp,double duration)
 			free_double_matrix(Liou);
 			free_complx_matrix(Prop);
 		}
-		/* update resulting density matrix wsp->sigma */
+		// update resulting density matrix wsp->sigma
 		sigma_update_partial(wsp->sigma,sub_idx[i],rho);
 		free_complx_vector(rho);
 	} //end of loop over subspaces
 
 	free_complx_matrix(temp_sigma);
 	wsp->Uisunit = 0;
+
+	********** 18.092024 ZT */
 }
 
 
 
 void spinach_acqblock(Tcl_Interp *interp, Tcl_Obj *obj, Sim_info *sim, Sim_wsp *wsp)
 {
+	fprintf(stderr,"stop in spinach_acqblock()\n");
+	exit(1);
+	/***** Disabled for errors in compilation 18.9.2024 ZT
+
 	complx z, *ptr;
 	double t_tmp, t_acq;
 	int i, Nrep;
@@ -1109,7 +1125,7 @@ void spinach_acqblock(Tcl_Interp *interp, Tcl_Obj *obj, Sim_info *sim, Sim_wsp *
 	t_tmp = wsp->acqblock_t0 = wsp->t;
 	t_acq = wsp->dw*(wsp->Nacq-1);
 
-	/* acquire first point */
+	// acquire first point
 	ptr = &(wsp->fid[++(wsp->curr_nsig)]);
 	if (sim->acq_adjoint == 0) {
 		z = cm_trace(wsp->fdetect,wsp->sigma);
@@ -1143,6 +1159,8 @@ void spinach_acqblock(Tcl_Interp *interp, Tcl_Obj *obj, Sim_info *sim, Sim_wsp *
 			exit(1);
 		}
 	}
+
+	********** 18.9.2024 ZT */
 }
 
 

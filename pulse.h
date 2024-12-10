@@ -38,5 +38,6 @@ void _delay(Sim_info *sim, Sim_wsp *wsp, double duration);
 void _pulseid(Sim_info *sim,Sim_wsp *wsp,double duration);
 int _setrfprop(Sim_info *sim, Sim_wsp *wsp);
 void _acq(Sim_info *sim, Sim_wsp *wsp, double phase, int do_reset);
+int _setrfprop_labdnp(Sim_info *sim, Sim_wsp *wsp);
 
 #endif /* __Pulse_H */

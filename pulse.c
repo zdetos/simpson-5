@@ -2074,6 +2074,330 @@ int tclPulseShapedRotorModulated(ClientData data,Tcl_Interp* interp,int argc, Tc
   return TCL_OK;
 }
 
+/****
+ * ZT: helper function for normal pulse_shaped_linear
+ ****/
+ void _pulse_shaped_linear(Sim_info *sim, Sim_wsp *wsp, int Nelem, int *mask, double steptime)
+{
+	 int i, n, Ntot, irf;
+	 //double dt;
+	 int Nchan = sim->ss->nchan;
+	 int chan;
+	 double *wx_left, *wy_left, *wx_right, *wy_right, *w_swap;
+	 double wam, wph, wxA, wxB, wyA, wyB;
+	 blk_mat_complx *HRF_left, *HRF_right;
+
+	 /* current limitation */
+	 if (wsp->evalmode == EM_ACQBLOCK) {
+		 fprintf(stderr,"pulse_shaped_linear cannot be used inside acq_block - not implemented\n");
+		 exit(1);
+	 }
+
+	 /* initialize */
+	 assert(wsp->dU != NULL);
+	 blk_cm_unit(wsp->dU);
+	 wx_left = double_vector(Nchan);
+	 wy_left = double_vector(Nchan);
+	 wx_right = double_vector(Nchan);
+	 wy_right = double_vector(Nchan);
+	 /* time steps */
+	 n = (int)ceil(steptime/wsp->dtmax);
+	 Ntot = (Nelem-1)*n;
+	 printf("pulse_shaped_linear: steptime %g split into %d steps of %g\n",steptime,n,wsp->dtmax);
+	 if (fabs(n*wsp->dtmax - steptime) > TINY) {
+		 fprintf(stderr,"pulse_shaped_linear error: steptime is not multiple of maxdt\n");
+		 exit(1);
+	 }
+	 printf("Total pulse_shaped_linear duration is (%d - 1) x %g = %g us, \n",Nelem, steptime, (Nelem-1)*steptime);
+	 printf("   --> will execute (%d - 1) x %d = %d steps\n",Nelem, n, Ntot);
+	 /* calculate left Hamiltonian at time zero */
+	 irf = 1;
+	 printf("pulse_shaped_linear starts at time %g us\n",wsp->t);
+	 ham_hamilton(sim,wsp); // H_int is in wsp->ham_blk, real matrix
+	 for (chan=1; chan<=Nchan; chan++) { // prepares (wx,wy) rf parameters
+		 if (mask[chan] == -1) {
+			 /* no rf applied on this channel */
+			 wam = 0.0;
+			 wph = 0.0;
+		 } else {
+			 wam = RFshapes[mask[chan]][irf].ampl;
+			 wph = RFshapes[mask[chan]][irf].phase*DEG2RAD;
+		 }
+		 /* set Ix and Iy components of the rf Hamiltonian */
+		 wx_left[chan] = wam*cos(wph);
+		 wy_left[chan] = wam*sin(wph);
+		 //printf("   chan %d : %g and %g\n",chan,wx_left[chan], wy_left[chan]);
+	 }
+	 // _setrfprop_linear(sim, wsp, wx_left, wy_left); // create RF Hamiltonian
+	 //
+	 for (i=1; i<=Ntot; i++) {
+		 printf("Executing step %d\n",i);
+		 /* calculate right Hamiltonian */
+		 //printf("Ham-R at time %g (irf = %d)\n",i*wsp->dtmax, irf);
+		 wsp->t += wsp->dtmax;
+		 printf("Ham-R calculated at time %g us\n",wsp->t);
+		 for (chan=1; chan<=Nchan; chan++) {
+			 if (mask[chan] == -1) {
+				 /* no rf applied on this channel */
+				 wxA = 0.0;
+				 wyA = 0.0;
+				 wxB = 0.0;
+				 wyB = 0.0;
+			 } else {
+				 wam = RFshapes[mask[chan]][irf].ampl;
+				 wph = RFshapes[mask[chan]][irf].phase*DEG2RAD;
+				 wxA = wam*cos(wph);
+				 wyA = wam*sin(wph);
+				 wam = RFshapes[mask[chan]][irf+1].ampl;
+				 wph = RFshapes[mask[chan]][irf+1].phase*DEG2RAD;
+				 wxB = wam*cos(wph);
+				 wyB = wam*sin(wph);
+			 }
+			 /* set Ix and Iy components of the rf Hamiltonian */
+			 wx_right[chan] = wx_left[chan]+(wxB-wxA)/steptime*wsp->dtmax;
+			 wy_right[chan] = wy_left[chan]+(wyB-wyA)/steptime*wsp->dtmax;
+			 printf("   chan %d : L = (%g, %g); R = (%g, %g)\n",chan,wx_left[chan], wy_left[chan],wx_right[chan], wy_right[chan]);
+		 }
+
+		 /* assemble exponent for propagator calculation */
+		 printf("calculating exponent\n");
+		 /* create propagator and update wsp-dU */
+		 printf("prop and update of wsp->dU\n");
+		 /* right Hamiltonian becomes left Hamiltonian */
+		 printf("Ham-R becomes Ham-L at relative-pulse-time %g\n",i*wsp->dtmax);
+		 w_swap = wx_left; wx_left = wx_right; wx_right = w_swap;
+		 w_swap = wy_left; wy_left = wy_right; wy_right = w_swap;
+		 if (i % n == 0) {
+			 irf++;
+		 }
+	 }
+
+	 // clear memory usage
+	 free_double_vector(wx_left);
+	 free_double_vector(wy_left);
+	 free_double_vector(wx_right);
+	 free_double_vector(wy_right);
+	 printf("finishing with pulse_shaped_linear at time %g us\n",wsp->t);
+
+	 /* add total pulse propagator to total evolution propagator */
+	 update_propagator(wsp->U, wsp->dU, sim, wsp);
+	 /* book keeping at the end */
+	 wsp->waspulse += 1;
+	 /* if used within pulseq optimizing propagator set this flag */
+	if (OCpar.gradmodeprop) {
+		wsp->OC_propstatus = 1;
+	}
+
+}
+
+/****
+ * ZT: implementation of shaped pulse whose shape gets modulated by rfmap
+ *     implementing PIECEWISE-LINEAR rf shape
+ ****/
+int tclPulseShapedRotorModulatedLinear(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
+{
+  int i, j, slot, iz, iphi, Nelem=-1, Nch=0, basis=0;
+  double duration, steptime, am, ph, bx, by;
+  int *mask, *OCchanmap = NULL, *mask2;
+  char cd[128], buf2[64];;
+  Sim_info *sim = NULL;
+  Sim_wsp *wsp = NULL;
+
+  read_sim_pointers(interp, &sim, &wsp);
+  spinach_disable_command(sim,"pulse_shaped_linear");
+
+  /* disable when relaxation is ON */
+  if (sim->relax) {
+     fprintf(stderr,"pulse_shaped_linear error: not supported in combination with relaxation.\n");
+     exit(1);
+  }
+
+  mask = int_vector(sim->ss->nchan);
+
+  /* READING ARGUMENTS  */
+  if (argc <= 2)
+    return TclError(interp,"Usage: pulse_shaped_linear <duration/usec> <RFshape on channel 1> ?<RFshape on channel 2>? ... ");
+  if (argc-2 != sim->ss->nchan)
+    return TclError(interp,"\nerror: pulse_shaped_linear: arguments must match number of channels\n"
+                            "        use 'nothing' as place holder when no rf is applied\n");
+  if (Tcl_GetDoubleFromObj(interp,argv[1],&duration) != TCL_OK)
+     return TCL_ERROR;
+  if (duration < 0.0)
+      return TclError(interp,"pulse_shaped_linear: duration must be zero or positive");
+
+  for (i=1; i<=sim->ss->nchan; i++) {
+     if (!strcmp(Tcl_GetString(argv[i+1]),"nothing")) {
+        mask[i] = -1;
+        basis += 1 << (i-1); // use channels with no rf for blocking
+	    DEBUGPRINT("Channel %d: no rf applied\n",i);
+	    continue;
+     } else {
+        /* read RFshape and check it */
+        if (Tcl_GetIntFromObj(interp,argv[i+1],&slot) != TCL_OK) {
+           return TclError(interp,"error in pulse_shaped_linear: argument %d must be interger <RFshape>",i+1 );
+        }
+	    if (!RFshapes[slot]) {
+           return TclError(interp,"pulse_shaped_linear: argument %d points to non-existing RFshape",i+1);
+	    }
+	    if (Nelem == -1) {
+	    	/* set variable for length of RFshapes */
+	    	Nelem=RFshapes_len(slot);
+	    } else {
+	    	/* check consistency of RFshape lengths */
+	    	if ( RFshapes_len(slot) != Nelem )
+	    		return TclError(interp,"pulse_shaped_linear: inconsistent number of elements in RFshapes!");
+	    }
+        DEBUGPRINT("Channel %d: slot %d Number of elements in the RFshape = %d\n",i-1,slot,Nelem);
+        mask[i] = slot;
+     }
+   }
+
+  if (sim->Nmz > sim->ss->nchan) {
+	  // use dummy channels for blocking
+	  for (i=sim->ss->nchan; i<sim->Nmz; i++) basis += 1 << i;
+  }
+
+  if (wsp->evalmode == EM_MEASURE) {
+	  wsp->t += duration;
+	  free_int_vector(mask);
+	  return TCL_OK;
+  }
+
+  /* piecewise-linear rfshape contains (n+1) values and n intervals */
+  steptime = duration/(Nelem-1);
+
+   /* setting propagator flag is done only within _pulse_shaped function */
+
+   if (sim->block_diag) {
+	   change_basis_pulse(sim, wsp, basis);
+	   if (wsp->U == NULL) wsp->U = create_blk_mat_complx_copy2(wsp->ham_blk);
+	   if (wsp->dU == NULL) wsp->dU = create_blk_mat_complx_copy2(wsp->ham_blk);
+   }
+
+   // tady by asi mela bejt modulace shape, vytvori se novej mask, kterej se podstrci jen do _pulse*
+   // nakonec se  modulovanej shape i mask zahodi
+   // !!! vytvareni a ruseni RFshape neni thread safe, je to globalni promenna
+   //     proto kazdy vlakno musi mit vlastni RFslot
+   mask2 = int_vector(sim->ss->nchan);
+   for (i=1; i<=sim->ss->nchan; i++) {
+	   if (mask[i] == -1) {
+		   mask2[i] = mask[i];
+//		   continue;
+	   } else {
+		   slot = MAXRFSHAPES-1-(i-1)*glob_info.num_threads-wsp->thread_id;  // get new slot index
+		   //printf("thread %d uses slot %d for shape %d\n",wsp->thread_id,slot,mask[i]);
+		   if (RFshapes[slot] != NULL) {
+			   fprintf(stderr,"pulse_shaped_linear error: RF slot %d seems occupied\n",slot);
+			   exit(1);
+		   }
+		   RFshapes[slot] = RFshapes_alloc(Nelem); // allocate new shape there
+		   mask2[i] = slot;
+		   iz = sim->rfmap->loop[(wsp->rf_idx)*2+0];   // z coil coordinate index
+		   iphi = sim->rfmap->loop[(wsp->rf_idx)*2+1]; // coil initial "phase" index
+		   int Nphi = sim->rfmap->z[iz*(sim->rfmap->Nch+1)+sim->rfmap->Nch]; // number of phi elements for current z position
+		   double steptimephi = sim->taur/Nphi;
+		   //printf("Timings: shape steptime - rfmap steptimephi = %g - %g = %g\n",steptime,steptimephi,steptime-steptimephi);
+		   assert(steptimephi - steptime >= -TINY); // limitation for fine-digitized shapes
+		   int iphi_shift = 0;
+		   double phitime = 0.0;
+		   //printf("Timings: shape steptime = %g, rfmap steptimephi = %g\n",steptime,steptimephi);
+		   for (j=1; j<=Nelem; j++) {
+//			   rfmap_get(sim->rfmap,iz,iphi+j-1,i-1,&bx,&by); // get distortion coefs
+			   rfmap_get(sim->rfmap,iz,iphi+iphi_shift,i-1,&bx,&by); // get distortion coefs
+			   am = RFshapes[mask[i]][j].ampl;  // original ampl/phase element
+			   ph = RFshapes[mask[i]][j].phase;
+			   RFshapes[mask2[i]][j].ampl = am*sqrt(bx*bx+by*by);
+			   RFshapes[mask2[i]][j].phase = ph+RAD2DEG*atan2(by,bx);
+			   //printf("Thread %d: chan %d, slot %3d: phitime = %g ... %d %g %g\n",wsp->thread_id,i,slot,phitime,j,bx,by);
+			   phitime += steptime;
+			   //if (phitime >= steptimephi) {
+			   if (steptimephi-phitime < 0.5*steptime) {
+				   phitime -= steptimephi;
+				   iphi_shift++;
+			   }
+		   }
+	   }
+   }
+
+   if (OCpar.gradmode) {
+      printf("pulse_shaped_linear does not know how to do gradients...");
+      exit(1);
+      DEBUGPRINT("pulse_shaped_linear does gradients\n");
+      /* determine which channels are active for gradients */
+      if (!OCpar.grad_shapes)
+         return TclError(interp,"error when calculating propagators for gradients: grad_shapes not defined");
+      int Nsh=LEN(OCpar.grad_shapes);
+      if (fabs(OCpar.grad_level-1)<1e-3) { /* original GRAPE ala Khaneja */
+    	  cd[0]='\0';
+    	  for (i=1; i<=sim->ss->nchan; i++) {
+    		  for (j=1; j<=Nsh; j++) {
+    			  if (OCpar.grad_shapes[j] == mask[i]) {
+    				  sprintf(buf2," I%dC%d",j,i);
+    				  strcat(cd,buf2);
+    				  Nch++;
+    				  break;
+    			  }
+    		  }
+    	  }
+    	  /* check if there is any gradient to calculate */
+    	  if (Nch==0) {
+    		  /* no, then do usual things */
+    		  DEBUGPRINT("pulse_shaped_linear - no variable shapes, just creates propagator\n");
+    		  _pulse_shaped_linear(sim,wsp,Nelem, mask2, steptime); // propagate with distorted shapes
+    	  } else {
+    		  /* yes, check for type of optimization */
+    		  DEBUGPRINT("pulse_shaped_linear created code '%s'\n",cd);
+    		  if ( OCpar.gradmodeprop == 1 ) {
+    			  /* do stuff for propagator optimization */
+    			  _pulse_shapedOCprops(sim,wsp,cd,Nch,Nelem,mask2,steptime); // propagate with distorted shapes
+    		  } else {
+    			  /* do stuff for state to state optimization */
+    			  _pulse_shapedOC(sim,wsp,cd,Nch,Nelem,mask2,steptime); // propagate with distorted shapes
+    		  }
+    	  }
+      } else { /* GRAPE with advanced gradients */
+    	  OCchanmap = int_vector(Nsh);
+    	  for (i=1; i<=Nsh; i++) {
+    		  OCchanmap[i] = -1;
+    		  //printf("grad_shapes[%d] = %d \n",i,OCpar.grad_shapes[i]);
+    		  for (j=1; j<=sim->ss->nchan; j++) {
+        		  //printf("\t mask[%d] = %d \n",j,mask[j]);
+    			  if (OCpar.grad_shapes[i] == mask[j]) {
+    				  OCchanmap[i] = j;
+    				  Nch++;
+        			  break;
+    			  }
+    		  }
+    		  //printf("\t OCchanmap[%d] = %d \n",i,OCchanmap[i]);
+    	  }
+    	  if (Nch == 0) {
+    		  _pulse_shaped_linear(sim,wsp,Nelem, mask2, steptime); // propagate with distorted shapes
+    	  } else {
+    		  if ( OCpar.gradmodeprop == 1 ) {
+    			  /* do stuff for propagator optimization */
+    			  _pulse_shapedOCprops_2(sim,wsp,Nelem,OCchanmap,mask2,steptime); // propagate with distorted shapes
+    		  } else {
+    			  /* do stuff for state to state optimization */
+    			  _pulse_shapedOC_2(sim,wsp,Nelem,OCchanmap,mask2,steptime); // propagate with distorted shapes
+    		  }
+
+    	  }
+    	  free_int_vector(OCchanmap);
+      }
+   } else {
+      /* do just actual pulsing */
+      _pulse_shaped_linear(sim,wsp,Nelem, mask2, steptime); // propagate with distorted shapes
+   }
+
+  free_int_vector(mask);
+  for (i=1; i<=LEN(mask2); i++) {
+	  if (mask2[i] != -1) free_RFshapes(mask2[i]);
+  }
+  free_int_vector(mask2);
+
+  return TCL_OK;
+}
+
 
 
 int tclDelay(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
@@ -2799,7 +3123,7 @@ int tclPulseZgrShaped(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv
   int i, j, slot, zgrslot, Nelem, Nch=0;
   double duration, steptime;
   int *mask, basis = 0;
-  char buf[256], cd[128], buf2[4];
+  char buf[256], cd[128], buf2[32];
   Sim_info *sim = NULL;
   Sim_wsp *wsp = NULL;
 
@@ -3263,6 +3587,7 @@ Tcl_CreateObjCommand(interp,"pulse_and_zgrad_shaped",(Tcl_ObjCmdProc *)tclPulseZ
 Tcl_CreateObjCommand(interp,"acq_block",(Tcl_ObjCmdProc *)tclAcqBlock,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 Tcl_CreateObjCommand(interp,"acq_modulus",(Tcl_ObjCmdProc *)tclAcqModulus,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 Tcl_CreateObjCommand(interp,"pulse_shaped_rotormodulated",(Tcl_ObjCmdProc *)tclPulseShapedRotorModulated,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
+Tcl_CreateObjCommand(interp,"pulse_shaped_linear",(Tcl_ObjCmdProc *)tclPulseShapedRotorModulatedLinear,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 
 Tcl_CreateObjCommand(interp,"test_function",(Tcl_ObjCmdProc *)tclTestFunc,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 

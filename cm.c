@@ -26,8 +26,13 @@
 	void zgeev_(const char *jobl, const char *jobr, const int *d1, void *data,const int *d2,
 			void *eigs, void *vl, const int *dvl,void *vr, const int *dvr, void *wsp,
 			const int *lwsp, double *rwork, int *info);
+	void zgesv_(const char *n, const char *nrhs, void *A, const int *lda, int *pvec, void *B, const int *ldb, int *info);
+	//zgesv_(&dim,&dim,lhs->data,&dim,pvec,rhs->data,&dim,&info);
 	void dsyev_(const char *job,const char *uplo, const int *K, double * dT, const int *L, double *eigs, double *dwsp, const int *ldwsp, int *info);
+	//dsyev_("V","U",&dim,dT,&dim, eigs, dwsp, &ldwsp, &info);
 	void zlarcm_(const int *K,const int *L,double *a,const int *M,void *cm,const int *ldcm,void *res,const int *ldres, double *dwsp);
+	void dsyevr_(const char *job, const char *range, const char *uplo,const int *K, double *A, const int *LDA, double *VL, double *VU, const int *IL, const int *IU, double *ABSTOL, int *M, double *W, double *Z, int *LDZ, int *ISUPPZ, double *WORK, int *LWORK, int *IWORK, int *LIWORK, int *INFO);
+	//dsyevr_("V","I","U",&dim,ham->data,&dim,NULL,NULL,&i,&dim,&abstol,&j,eigs,T->data,&dim,isupp,&wkopt,&lwork,&iwkopt,&liwork, &info);
 #endif
 #include "defs.h"
 #include "auxmath.h"
@@ -5584,10 +5589,12 @@ void prop_diag2_real(mat_complx *prop, mat_double *ham, double dt)
 	int lwork = -1;
 	int iwkopt;
 	int liwork = -1;
+	//printf("prop_diag2_real: first call to dsyevr\n");
 	dsyevr_("V","I","U",&dim,ham->data,&dim,NULL,NULL,&i,&dim,&abstol,&j,
 			eigs,T->data,&dim,isupp,&wkopt,&lwork,&iwkopt,&liwork, &info);
 	// j is total number of eigval found
 	lwork = (int)wkopt;
+	//printf("   --> obtailned wkopt %g and lwork %d\n",wkopt,lwork);
 	double *work = (double*)malloc( lwork*sizeof(double) );
 	liwork = iwkopt;
 	int *iwork = (int*)malloc( liwork*sizeof(int) );

@@ -2080,25 +2080,12 @@ int tclPulseShapedRotorModulated(ClientData data,Tcl_Interp* interp,int argc, Tc
  void _pulse_shaped_linear(Sim_info *sim, Sim_wsp *wsp, int Nelem, int *mask, double steptime)
 {
 	 int i, n, Ntot, irf;
-	 double dt;
+	 //double dt;
 	 int Nchan = sim->ss->nchan;
 	 int chan;
 	 double *wx_left, *wy_left, *wx_right, *wy_right, *w_swap;
 	 double wam, wph, wxA, wxB, wyA, wyB;
-/*  int i, j;
-  for (j=1; j<=Nelem; j++) {
-	  for (i=1; i<=sim->ss->nchan; i++) {
-		  if (mask[i] == -1) {
-			  _rf(wsp,i,0.0);
-			  _ph(wsp,i,0.0);
-		  } else {
-			  _rf(wsp,i,RFshapes[mask[i]][j].ampl);
-			  _ph(wsp,i,RFshapes[mask[i]][j].phase);
-		  }
-	  }
-	  _pulse(sim,wsp,steptime);
-  }
-*********/
+	 blk_mat_complx *HRF_left, *HRF_right;
 
 	 /* current limitation */
 	 if (wsp->evalmode == EM_ACQBLOCK) {
@@ -2125,8 +2112,9 @@ int tclPulseShapedRotorModulated(ClientData data,Tcl_Interp* interp,int argc, Tc
 	 printf("   --> will execute (%d - 1) x %d = %d steps\n",Nelem, n, Ntot);
 	 /* calculate left Hamiltonian at time zero */
 	 irf = 1;
-	 //printf("Ham-L at time %g (irf = %d)\n",0.0, irf);
-	 for (chan=1; chan<=Nchan; chan++) {
+	 printf("pulse_shaped_linear starts at time %g us\n",wsp->t);
+	 ham_hamilton(sim,wsp); // H_int is in wsp->ham_blk, real matrix
+	 for (chan=1; chan<=Nchan; chan++) { // prepares (wx,wy) rf parameters
 		 if (mask[chan] == -1) {
 			 /* no rf applied on this channel */
 			 wam = 0.0;
@@ -2140,10 +2128,14 @@ int tclPulseShapedRotorModulated(ClientData data,Tcl_Interp* interp,int argc, Tc
 		 wy_left[chan] = wam*sin(wph);
 		 //printf("   chan %d : %g and %g\n",chan,wx_left[chan], wy_left[chan]);
 	 }
+	 // _setrfprop_linear(sim, wsp, wx_left, wy_left); // create RF Hamiltonian
+	 //
 	 for (i=1; i<=Ntot; i++) {
 		 printf("Executing step %d\n",i);
 		 /* calculate right Hamiltonian */
 		 //printf("Ham-R at time %g (irf = %d)\n",i*wsp->dtmax, irf);
+		 wsp->t += wsp->dtmax;
+		 printf("Ham-R calculated at time %g us\n",wsp->t);
 		 for (chan=1; chan<=Nchan; chan++) {
 			 if (mask[chan] == -1) {
 				 /* no rf applied on this channel */
@@ -2172,7 +2164,7 @@ int tclPulseShapedRotorModulated(ClientData data,Tcl_Interp* interp,int argc, Tc
 		 /* create propagator and update wsp-dU */
 		 printf("prop and update of wsp->dU\n");
 		 /* right Hamiltonian becomes left Hamiltonian */
-		 printf("Ham-R becomes Ham-L at time %g\n",i*wsp->dtmax);
+		 printf("Ham-R becomes Ham-L at relative-pulse-time %g\n",i*wsp->dtmax);
 		 w_swap = wx_left; wx_left = wx_right; wx_right = w_swap;
 		 w_swap = wy_left; wy_left = wy_right; wy_right = w_swap;
 		 if (i % n == 0) {
@@ -2180,6 +2172,12 @@ int tclPulseShapedRotorModulated(ClientData data,Tcl_Interp* interp,int argc, Tc
 		 }
 	 }
 
+	 // clear memory usage
+	 free_double_vector(wx_left);
+	 free_double_vector(wy_left);
+	 free_double_vector(wx_right);
+	 free_double_vector(wy_right);
+	 printf("finishing with pulse_shaped_linear at time %g us\n",wsp->t);
 
 	 /* add total pulse propagator to total evolution propagator */
 	 update_propagator(wsp->U, wsp->dU, sim, wsp);
@@ -3125,7 +3123,7 @@ int tclPulseZgrShaped(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv
   int i, j, slot, zgrslot, Nelem, Nch=0;
   double duration, steptime;
   int *mask, basis = 0;
-  char buf[256], cd[128], buf2[4];
+  char buf[256], cd[128], buf2[32];
   Sim_info *sim = NULL;
   Sim_wsp *wsp = NULL;
 
@@ -3594,7 +3592,3 @@ Tcl_CreateObjCommand(interp,"pulse_shaped_linear",(Tcl_ObjCmdProc *)tclPulseShap
 Tcl_CreateObjCommand(interp,"test_function",(Tcl_ObjCmdProc *)tclTestFunc,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 
 }
-
-
-
-

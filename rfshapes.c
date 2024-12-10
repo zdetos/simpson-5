@@ -10,8 +10,22 @@
  #include "tclutil.h"
  #include "rfshapes.h"
  
+#ifdef INTEL_MKL
+#include "mkl.h"
+#include "mkl_spblas.h"
+#elif defined(__APPLE__)
+#include <Accelerate/Accelerate.h>
+#elif defined(GSL)
+#include <gsl/gsl_cblas.h>
+#else
+#include "cblas.h"
+#endif
+
  /* define global array of pointers to rf shapes */
  RFelem *RFshapes[MAXRFSHAPES];
+ // 1.12.2024 ZT: implementing GROUP optimizations, basis definition
+#include "matrix.h"
+ mat_double *GROUPbasis[8];
  
 /****
  * initialization of RFshapes
@@ -916,6 +930,223 @@ int tclShapeCreate(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
   return TclSetResult(interp,"%d",slot);
 }
 
+// 1.12.2024 ZT: implementing GROUP optimizations, basis initiation
+void GROUPbasis_init() {
+  int a;
+  for (a=0; a<8; a++) {
+    GROUPbasis[a] = NULL;
+  }
+}
+
+int GROUPbasis_slot() {
+  int a;
+
+  for (a=0; a<8; a++) {
+     if (!GROUPbasis[a]) {
+        break;
+     }
+  }
+  if (a >= 8) {
+     fprintf(stderr,"GROUPbasis error: no more free slots available\n");
+     a=-1;
+  }
+  return a;
+}
+
+mat_double* GROUPbasis_alloc(int Nrows, int Ntimes) {
+  mat_double* v;
+
+  v =  double_matrix(Nrows, Ntimes, MAT_DENSE, Nrows*Ntimes, 0);
+  if (!v) {
+     fprintf(stderr,"error: unable to allocate GROUPbasis matrix");
+     exit(1);
+  }
+  return v;
+}
+
+void free_GROUPbasis(int slot) {
+	free_double_matrix(GROUPbasis[slot]);
+    GROUPbasis[slot] = NULL;
+}
+
+void GROUPbasis_reset() {
+  int a;
+
+  for (a=0; a<8; a++) {
+    if (GROUPbasis[a] != NULL) {
+      free_GROUPbasis(a);
+      GROUPbasis[a] = NULL;
+    }
+  }
+}
+
+/* implementation of Tcl group_basis_alloc routine */
+int tclGROUPbasisAllocate(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
+{
+  int slot, Nrows, Ntimes;
+
+  if ( (argc != 3) )
+    return TclError(interp,"usage: <slot> group_basis_alloc <Nrows> <Ntimes>");
+  if (Tcl_GetIntFromObj(interp,argv[1],&Nrows) == TCL_ERROR)
+	return TclError(interp,"group_basis_alloc: argument 1 must be integer <num of rows>");
+  if (Tcl_GetIntFromObj(interp,argv[2],&Ntimes) == TCL_ERROR)
+	return TclError(interp,"group_basis_alloc: argument 2 must be integer <num of time-slices>");
+
+  /* get a new slot and allocate */
+  slot = GROUPbasis_slot();
+  if (slot == -1) {
+	return TclError(interp,"group_basis_alloc error: no more free slots available, free some basis first!");
+  }
+  GROUPbasis[slot] = GROUPbasis_alloc(Nrows, Ntimes);
+
+  return TclSetResult(interp,"%d",slot);
+}
+
+/* implementation of Tcl group_basis_setrow routine */
+int tclGROUPbasisSetRow(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
+{
+  int slot, row, k, Nrows, Ntimes;
+  char script[2048];
+  const char *expr;
+  Tcl_Obj *tclres;
+  double val;
+
+  if ( (argc != 4) )
+    return TclError(interp,"usage: group_basis_setrow <basis_slot> <row> {expression}");
+  if (Tcl_GetIntFromObj(interp,argv[1],&slot) == TCL_ERROR)
+    return TclError(interp,"group_basis_setrow: argument 1 must be integer <group_basis_slot>");
+  /* check for GROUPbasis existence */
+  if (!GROUPbasis[slot])
+    return TclError(interp,"group_basis_setrow: trying to access non-existing group_basis_slot");
+  if (Tcl_GetIntFromObj(interp,argv[2],&row) == TCL_ERROR)
+    return TclError(interp,"group_basis_setrow: argument 2 must be integer <row index>");
+  /* get dimensions */
+  Nrows = GROUPbasis[slot]->row;
+  Ntimes = GROUPbasis[slot]->col;
+  /* check row index to be 1-based */
+  if (row < 1 || row > Nrows)
+    return TclError(interp,"group_basis_setrow: row index out of range; must be 1-based index");
+
+  /* evaluate expression in Tcl */
+  expr = Tcl_GetString(argv[3]);
+  for (k=1; k<=Ntimes; k++) {
+    sprintf(script,"\n set i %d\n expr %s\n", k, expr);
+    if ( Tcl_EvalEx(interp, script, -1,TCL_EVAL_DIRECT) != TCL_OK )
+      return TclError(interp,"error in group_basis_setrow: can not evaluate %s for index %d",expr, k);
+    tclres = Tcl_GetObjResult(interp);
+    if ( Tcl_GetDoubleFromObj(interp,tclres,&val) != TCL_OK )
+      return TclError(interp,"error in group_basis_setrow: can not get result for index %d",k);
+    GROUPbasis[slot]->data[(row-1) + (k-1)*Nrows] = val;
+   }
+
+  return TCL_OK;
+}
+
+
+/* implementation of Tcl group_basis_save routine
+ ****/
+int tclGOUPbasisSave(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
+{
+   int slot, Nrow, Ntime, row, col;
+   const char *fname;
+   FILE* fp;
+   char fullname[256];
+
+  if (argc != 3)
+    return TclError(interp,"usage: group_basis_save <basis slot> <name of file>");
+  if (Tcl_GetIntFromObj(interp,argv[1],&slot) == TCL_ERROR)
+    return TclError(interp,"group_basis_save: argument 1 must be integer <basis slot>");
+
+  fname = Tcl_GetString(argv[2]);
+
+  /* does the slot hold a basis? */
+  if (!GROUPbasis[slot]) {
+    fprintf(stderr,"group_basis_save error: the basis does not exist\n");
+    exit(1);
+  }
+  /* get dimensions */
+  Nrow = GROUPbasis[slot]->row;
+  Ntime = GROUPbasis[slot]->col;
+
+  strcpy(fullname,fname);
+#ifdef UNIX
+  if (fname[0] == '~') {
+    char* p=getenv("HOME");
+    if (p != NULL) {
+      strcpy(fullname,p);
+	  strcat(fullname,&fname[1]);
+    }
+  }
+#endif
+  fp=fopen(fullname,"w");
+  if (!fp) {
+    fprintf(stderr,"group_basis_save error: unable to create file %s\n\n",fullname);
+    exit(1);
+  }
+
+  for (row=0;row<Nrow; row++) {
+	for (col=0; col<Ntime; col++) {
+      fprintf(fp," %.15g",GROUPbasis[slot]->data[row+col*Nrow]);
+    }
+	fprintf(fp,"\n");
+  }
+  fclose(fp);
+
+  return TCL_OK;
+}
+
+
+/* implementation of Tcl group_basis_generate_rfshape */
+int tclGOUPbasisGenerateRFshape(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
+{
+  int amplslot, rfslot, basisslot, row, Nrow, Ntime;
+  double *wx, *wy;
+
+  if ( argc != 3 )
+    return TclError(interp,"Usage: <RFshape> group_basis_generate_rfshape <shape> <basis slot>");
+
+  if (Tcl_GetIntFromObj(interp,argv[1],&amplslot) == TCL_ERROR)
+    return TclError(interp,"group_basis_generate_rfshape: first argument must be integer <shape>");
+  /* check for RFshape existence */
+  if (!RFshapes[amplslot])
+    return TclError(interp,"group_basis_generate_rfshape: trying to access non-existing shape");
+  if (Tcl_GetIntFromObj(interp,argv[2],&basisslot) == TCL_ERROR)
+    return TclError(interp,"group_basis_generate_rfshape: second argument must be integer <basis slot>");
+  /* check for GROUPbasis existence */
+  if (!GROUPbasis[basisslot])
+    return TclError(interp,"group_basis_generate_rfshape: trying to access non-existing basis");
+  /* get dimensions */
+  Nrow = GROUPbasis[basisslot]->row;
+  Ntime = GROUPbasis[basisslot]->col;
+  if (Nrow != RFshapes_len(amplslot))
+	return TclError(interp,"group_basis_generate_rfshape: dimension mismatch, shape length is different from number of basis functions");
+
+  /* get a new slot and allocate */
+  rfslot = RFshapes_slot();
+  if (rfslot == -1) {
+     return TclError(interp,"group_basis_generate_rfshapep error: no more free slots available, free some shape first!");
+  }
+  RFshapes[rfslot] = RFshapes_alloc(Ntime);
+
+  /* vector of x/y representation of RF shape (calloc should fill with zeros)*/
+  wx = (double*)calloc((Ntime), sizeof(double));
+  wy = (double*)calloc((Ntime), sizeof(double));
+  for (row=0; row<Nrow; row++) {
+	double *ibr = GROUPbasis[basisslot]->data;
+	cblas_daxpy(Ntime,RFshapes[amplslot][row+1].ampl,ibr+row,Nrow,wx,1);
+	cblas_daxpy(Ntime,RFshapes[amplslot][row+1].phase,ibr+row,Nrow,wy,1);
+  }
+  /* convert to ampl/phase of RFshape */
+  for (row=0; row<Ntime; row++) {
+    RFshapes[rfslot][row+1].ampl = sqrt(wx[row]*wx[row]+wy[row]*wy[row]);
+    RFshapes[rfslot][row+1].phase = RAD2DEG*atan2(wy[row],wx[row]);
+  }
+  /* clean up */
+  free((char*)wx);
+  free((char*)wy);
+
+  return TclSetResult(interp,"%d",rfslot);
+}
 
 
 /* implement new commands */
@@ -937,4 +1168,10 @@ void tclcmd_rfshape(Tcl_Interp* interp) {
    Tcl_CreateObjCommand(interp,"shape_manipulate",(Tcl_ObjCmdProc *)tclShapeManipulate,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
    Tcl_CreateObjCommand(interp,"shape_create",(Tcl_ObjCmdProc *)tclShapeCreate,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
    Tcl_CreateObjCommand(interp,"shape_index_set",(Tcl_ObjCmdProc *)tclShapeIndexSet,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
- }
+   // 1.12.2024 ZT: implementing GROUP optimizations, basis creation
+   Tcl_CreateObjCommand(interp,"group_basis_alloc",(Tcl_ObjCmdProc *)tclGROUPbasisAllocate,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
+   Tcl_CreateObjCommand(interp,"group_basis_setrow",(Tcl_ObjCmdProc *)tclGROUPbasisSetRow,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
+   Tcl_CreateObjCommand(interp,"group_basis_save",(Tcl_ObjCmdProc *)tclGOUPbasisSave,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
+   Tcl_CreateObjCommand(interp,"group_basis_generate_rfshape",(Tcl_ObjCmdProc *)tclGOUPbasisGenerateRFshape,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
+
+}

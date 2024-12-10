@@ -60,6 +60,7 @@
 #include "OCroutines.h"
 #include "fidcalc.h"
 #include "pthread_barrier_mac.h"
+#include "cblas.h"
 
 //extern void simpson_nfft_test(void);
 

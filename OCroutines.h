@@ -12,6 +12,7 @@ typedef struct _OCoptPars {
 	char VarSaveProc[64];
 	int gradmode, gradmodeprop, *var_shapes, *grad_shapes, *var_shapes_penalty_order;
 	double *var_shapes_min, *var_shapes_max, *var_shapes_rmsmax, *var_shapes_penalty_factor;
+	int group; // set to 1 if GROUP optimization basis
 } OCoptPars;
   
 /* global variable holding all OC parameters */

@@ -474,7 +474,7 @@ void _pulse_shapedOC_2_dnpframe(Sim_info *sim, Sim_wsp *wsp, int Nelem, int *OCc
 	int dim2 = dim*dim;
 	int Nsh = LEN(OCchanmap);
 	mat_complx *cH = NULL, *kom = NULL, *cdum = NULL;
-	complx *cvec = NULL;
+	//complx *cvec = NULL;
 	mat_complx *gr = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
 	// variables for rfmap hack
 	int iz = 0, iphi = 0, Nphi = 0, iphi_shift = 0;
@@ -2358,6 +2358,30 @@ void gradOC_prop_2(Sim_info *sim, Sim_wsp *wsp, int ud)
 
 }
 
+ void update_GROUPshapes_by_step(double step, double *dir, RFelem *CURRshapes[])
+{
+  double x, y;
+  int j, i, ii, Nii;
+  int Nshapes = OCpar.var_shapes[0];
+
+  j=0;
+  for (i=1; i<=Nshapes; i++) {
+ 	 Nii = RFshapes_len(OCpar.var_shapes[i]);
+ 	 for (ii=1; ii<=Nii; ii++) {
+ 		 /* get original x,y components for this shape */
+ 		 x = CURRshapes[i-1][ii].ampl;
+ 		 y = CURRshapes[i-1][ii].phase;
+ 		 /* move them to new value */
+ 		 j++;
+ 		 x += step*dir[j];
+ 		 j++;
+ 		 y += step*dir[j];
+ 		 /* store them in relevant RFshape */
+ 		 RFshapes[OCpar.var_shapes[i]][ii].ampl = x;
+ 		 RFshapes[OCpar.var_shapes[i]][ii].phase = y;
+ 	 }
+  }
+}
 
 /****
  * ZT: function to minimize during linesearch
@@ -2367,7 +2391,10 @@ void gradOC_prop_2(Sim_info *sim, Sim_wsp *wsp, int ud)
   double fval;
   
   /* update RFshapes. Assumes RFshapes in ampl/phase and gradients in x/y */
-  update_RFshapes_by_step(step,dir,CURRshapes);
+  if (OCpar.group == 1)
+	  update_GROUPshapes_by_step(step,dir,CURRshapes);
+  else
+	  update_RFshapes_by_step(step,dir,CURRshapes);
   /* call target function */
   fval = -evaluate_target_function(interp);
   
@@ -2691,7 +2718,10 @@ void gradOC_prop_2(Sim_info *sim, Sim_wsp *wsp, int ud)
   
   
   /* make sure that current RFshapes hold this new position */
-  update_RFshapes_by_step(stepsize,dir,CURRshapes);
+  if (OCpar.group == 1)
+	  update_GROUPshapes_by_step(stepsize,dir,CURRshapes);
+  else
+	  update_RFshapes_by_step(stepsize,dir,CURRshapes);
 
   return stepsize;
 }
@@ -2915,16 +2945,30 @@ static lbfgsfloatval_t lbfgs_evaluate(void *interp,
 	extern FD** fd;
 
 	/* copy variables into shapes */
-    k = 0;
-    for (i=1; i<=OCpar.var_shapes[0]; i++) {
-       N = RFshapes_len(OCpar.var_shapes[i]);
-       for (j=1; j<=N; j++) {
-    	   double re = x[k++];
-    	   double im = x[k++];
-    	   RFshapes[OCpar.var_shapes[i]][j].ampl = sqrt(re*re+im*im);
-    	   RFshapes[OCpar.var_shapes[i]][j].phase = RAD2DEG*atan2(im,re);
-       }
-    }
+	if (OCpar.group == 0) { // standard RF shapes with ampl/phase
+      k = 0;
+      for (i=1; i<=OCpar.var_shapes[0]; i++) {
+         N = RFshapes_len(OCpar.var_shapes[i]);
+         for (j=1; j<=N; j++) {
+    	     double re = x[k++];
+    	     double im = x[k++];
+    	     RFshapes[OCpar.var_shapes[i]][j].ampl = sqrt(re*re+im*im);
+    	     RFshapes[OCpar.var_shapes[i]][j].phase = RAD2DEG*atan2(im,re);
+         }
+      }
+	} else if (OCpar.group == 1) { // GROUP RF shapes with x/y
+      k = 0;
+      for (i=1; i<=OCpar.var_shapes[0]; i++) {
+         N = RFshapes_len(OCpar.var_shapes[i]);
+         for (j=1; j<=N; j++) {
+    	     RFshapes[OCpar.var_shapes[i]][j].ampl = x[k++];
+    	     RFshapes[OCpar.var_shapes[i]][j].phase = x[k++];
+         }
+      }
+	} else {
+    	fprintf(stderr,"ERROR: unexpected value of OCpar.group in lbfgs\n");
+    	exit(1);
+	}
     /* evaluate target function */
     fx = -evaluate_target_function((Tcl_Interp*)interp);
     //printf("ev: tf = %g\n",fx);
@@ -3053,15 +3097,30 @@ double OptimizeLBFGS(Tcl_Interp* interp)
     Nvars *= 2;
     /* initialize vector of variables x - rf Ix, rf Iy */
     x = lbfgs_malloc(Nvars);
-    k = 0;
-    for (i=1; i<=Nshapes; i++) {
-       N = RFshapes_len(OCpar.var_shapes[i]);
-       for (j=1; j<=N; j++) {
-    	   double am = RFshapes[OCpar.var_shapes[i]][j].ampl;
-    	   double ph = RFshapes[OCpar.var_shapes[i]][j].phase*DEG2RAD;
-    	   x[k++] = am*cos(ph);
-    	   x[k++] = am*sin(ph);
-       }
+    if (OCpar.group == 0) { // standard RF shapes with ampl/phase
+      k = 0;
+      for (i=1; i<=Nshapes; i++) {
+         N = RFshapes_len(OCpar.var_shapes[i]);
+         for (j=1; j<=N; j++) {
+    	     double am = RFshapes[OCpar.var_shapes[i]][j].ampl;
+    	     double ph = RFshapes[OCpar.var_shapes[i]][j].phase*DEG2RAD;
+    	     x[k++] = am*cos(ph);
+    	     x[k++] = am*sin(ph);
+         }
+      }
+    } else if (OCpar.group == 1) { // GROUP shapes with x/y
+        k = 0;
+        for (i=1; i<=Nshapes; i++) {
+           N = RFshapes_len(OCpar.var_shapes[i]);
+           for (j=1; j<=N; j++) {
+      	     x[k++] = RFshapes[OCpar.var_shapes[i]][j].ampl;
+      	     x[k++] = RFshapes[OCpar.var_shapes[i]][j].phase;
+           }
+        }
+
+    } else {
+    	fprintf(stderr,"ERROR: unexpected value of OCpar.group in lbfgs\n");
+    	exit(1);
     }
     /* Initialize the parameters for the L-BFGS optimization. */
     lbfgs_parameter_init(&param);
@@ -3278,8 +3337,16 @@ double OptimizePhaseLBFGS(Tcl_Interp* interp)
   TclGetString(interp,strbuf,"par","oc_method",0,"CG");
   if (!strncmp(strbuf,"CG",2)) {
 	  OCpar.method = 1;
+	  if (!strncmp(strbuf,"CG-GROUP",8))
+		  OCpar.group = 1;
+	  else
+		  OCpar.group = 0;
   } else if (!strncmp(strbuf,"L-BFGS",6)) {
 	  OCpar.method = 0;
+	  if (!strncmp(strbuf,"L-BFGS-GROUP",12))
+		  OCpar.group = 1;
+	  else
+		  OCpar.group = 0;
   } else {
      fprintf(stderr,"oc_optimize error: invalid oc_method, can be 'CG' or 'L-BFGS'\n");
      exit(1);
@@ -4190,8 +4257,175 @@ printf("calculations done\n");
 
 }
 
+ // 1.12.2024 ZT: implementing GROUP optimizations, conversion of gradients
+/* Tcl implementation of oc_grad_convert_to_group */
+int tclGrad2GROUP(ClientData data,Tcl_Interp* interp, int argc, Tcl_Obj *argv[])
+{
+  int xygradslot, gradslot, amplslot, basisslot, row, Nrows, Ntime, k, NN;
+  extern FD** fd;
+  extern int nfd;
+  double *xygradptrre,*xygradptrim, *basiselem;
+  complx *gradelem;
+  int gradidx, gradidxmax;
 
+  /* check arguments */
+  if ( (argc < 5) || ((argc-3)%2) )
+    return TclError(interp,"usage: oc_grad_convert_to_group <RF x/y grad> <GROUP grad> <GROUP shape> <GROUP basis> ?<GROUP shape 2> <GROUP basis 2> ...?");
+  NN = (argc-3)/2;  // this is number of GROUP shapes
+  if (Tcl_GetIntFromObj(interp,argv[1],&xygradslot) == TCL_ERROR)
+    return TclError(interp,"oc_grad_convert_to_group: first argument must be integer <RF x/y grad>");
+  if (xygradslot < 1 || xygradslot > nfd || fd[xygradslot] == NULL)
+    return TclError(interp,"oc_grad_convert_to_group: data set <RF x/y grad> does not exist\n");
+  if (Tcl_GetIntFromObj(interp,argv[2],&gradslot) == TCL_ERROR)
+    return TclError(interp,"oc_grad_convert_to_group: second argument must be integer <GROUP grad>");
+  if (gradslot < 1 || gradslot > nfd || fd[gradslot] == NULL)
+    return TclError(interp,"oc_grad_convert_to_group: data set <GROUP grad> does not exist\n");
 
+  // real part of xygrad starts here and has step of 2, contains grad w.r.t. x-component
+  xygradptrre = (double*)(fd[xygradslot]->data+1);
+  xygradptrim = (double*)(fd[xygradslot]->data+1)+1;
+  //  GROUP gradient element - ONE-based indexing!!!
+  gradelem = fd[gradslot]->data;
+  gradidxmax = fd[gradslot]->np;
+  gradidx = 0;
+
+  for (k=0; k<NN; k++) { // loop over GROUP shapes & basis pairs given as arguments
+    if (Tcl_GetIntFromObj(interp,argv[3+k*2],&amplslot) == TCL_ERROR)
+      return TclError(interp,"oc_grad_convert_to_group: (%d). argument must be integer <GROUP shape>",3+k*2);
+    if (!RFshapes[amplslot])
+      return TclError(interp,"oc_grad_convert_to_group: (%d). argument - shape does not exist",3+k*2);
+    if (Tcl_GetIntFromObj(interp,argv[3+k*2+1],&basisslot) == TCL_ERROR)
+      return TclError(interp,"oc_grad_convert_to_group: (%d). argument must be integer <GROUP basis>",3+k*2+1);
+    if (!GROUPbasis[basisslot])
+      return TclError(interp,"oc_grad_convert_to_group: (%d). argument - GROUP basis does not exist",3+k*2+1);
+    Nrows = RFshapes_len(amplslot);
+    if (Nrows != GROUPbasis[basisslot]->row)
+      return TclError(interp,"oc_grad_convert_to_group: (%d)/(%d) arguments - dimension mismatch",3+k*2,3+k*2+1);
+    Ntime = GROUPbasis[basisslot]->col;
+    for (row=0; row<Nrows; row++) {
+    	basiselem = GROUPbasis[basisslot]->data+row; // step is Nrows
+    	gradidx++; // increment grad index and check for overflow
+    	if (gradidx > gradidxmax)
+    	  return TclError(interp,"oc_grad_convert_to_group: GROUP grad overflow");
+    	gradelem[gradidx].re = cblas_ddot(Ntime,xygradptrre,2,basiselem,Nrows);
+    	gradelem[gradidx].im = cblas_ddot(Ntime,xygradptrim,2,basiselem,Nrows);
+    }
+    // shift xygrad pointers to another RF shape
+    xygradptrre += 2*Ntime;
+    xygradptrim += 2*Ntime;
+  } // end of loop over GROUP shapes & basis pairs
+
+  return TCL_OK;
+}
+
+/* Tcl implementation of oc_rf_penalty */
+int tclRFpenalty(ClientData data,Tcl_Interp* interp, int argc, Tcl_Obj *argv[])
+{
+  int pwr, i, slot, len;
+  double result, scl;
+  char *buf;
+  const char *usage = "Usage: <double> oc_rf_penalty <RFshape> ?-power <int>? ?-scale <double>?";
+
+  if ( (argc < 2) || (argc > 6) || (argc%2) )
+      return TclError(interp,usage);
+  if (Tcl_GetIntFromObj(interp,argv[1],&slot) == TCL_ERROR)
+    return TclError(interp,"oc_rf_penalty: argument 1 must be integer <RFshape>");
+  /* check for RFshape existence */
+  if (!RFshapes[slot])
+     return TclError(interp,"oc_rf_penalty: trying to access non-existing RFshape");
+  len = RFshapes_len(slot);
+
+  // default values
+  pwr = 2;
+  scl = 1.0;
+  result = 0.0;
+  for (i=2; i<argc; i++) {
+    buf = Tcl_GetString(argv[i]);
+	if (!strcmp(buf,"-power")) {
+	  i++;
+  	  if (Tcl_GetIntFromObj(interp,argv[i],&pwr) == TCL_ERROR)
+		return TclError(interp,"oc_rf_penalty: argument following -power must be integer");
+	} else if (!strcmp(buf,"-scale")) {
+	  i++;
+	  if (Tcl_GetDoubleFromObj(interp,argv[i],&scl) == TCL_ERROR)
+		return TclError(interp,"oc_rf_penalty: argument following -scale must be double");
+	} else
+	  return TclError(interp,usage);
+  }
+  // calculation
+  for (i=1; i<=len; i++) {
+    result += pow(RFshapes[slot][i].ampl,pwr);
+  }
+  result *= scl;
+
+  return TclSetResult(interp,"%.15g",result);
+}
+
+/* Tcl implementation of oc_rf_penalty_grad */
+int tclRFpenaltyGrad(ClientData data,Tcl_Interp* interp, int argc, Tcl_Obj *argv[])
+{
+  int i, j, len, slot, gradslot, gradidx, gradidxmax, pwr;
+  double scl, am, ph, wx, wy;
+  extern FD** fd;
+  extern int nfd;
+  complx *gradelem;
+  char *buf;
+  const char *usage = "Usage: oc_rf_penalty_grad <gradFID> <RFshape> ?-power <int>? ?-scale <double>? ?<RFshape> ?-power <int>? ?-scale <double>? ...";
+
+  if (argc < 3)
+	  return TclError(interp,usage);
+  if (Tcl_GetIntFromObj(interp,argv[1],&gradslot) == TCL_ERROR)
+    return TclError(interp,"oc_rf_penalty_grad: first argument must be integer <x/y grad>");
+  if (gradslot < 1 || gradslot > nfd || fd[gradslot] == NULL)
+    return TclError(interp,"oc_rf_penalty_grad: data set <x/y grad> does not exist\n");
+  gradelem = fd[gradslot]->data;
+  gradidxmax = fd[gradslot]->np;
+  gradidx = 0;
+
+  for (i=2; i<argc; i++) {
+    // default values
+    pwr = 2;
+    scl = 1.0;
+    if (Tcl_GetIntFromObj(interp,argv[i],&slot) != TCL_OK)
+      return TclError(interp,"oc_rf_penalty_grad: error in argument %d, expecting integer <RFshape>",i);
+    // check if there is another argument
+    while (i+1 < argc) {
+      buf = Tcl_GetString(argv[i+1]);
+      if (!strcmp(buf,"-power")) {
+        i += 2;
+        if (i >= argc)
+          return TclError(interp,"oc_rf_penalty_grad: missing argument after -power");
+        if (Tcl_GetIntFromObj(interp,argv[i],&pwr) == TCL_ERROR)
+      	  return TclError(interp,"oc_rf_penalty_grad: argument %d, following -power, must be integer", i);
+      } else if (!strcmp(buf,"-scale")) {
+        i += 2;
+        if (i >= argc)
+          return TclError(interp,"oc_rf_penalty_grad: missing argument after -scale");
+        if (Tcl_GetDoubleFromObj(interp,argv[i],&scl) == TCL_ERROR)
+      	  return TclError(interp,"oc_rf_penalty_grad: argument %d, following -scale, must be double", i);
+      } else {
+        // next argument seems to be a shape, forget it
+    	break;
+	  }
+    }
+    // process the gradient of this shape
+    len = RFshapes_len(slot);
+    for (j=1; j<=len; j++) {
+      am = RFshapes[slot][j].ampl;
+      ph = RFshapes[slot][j].phase;
+      wx = am*cos(ph*DEG2RAD);
+      wy = am*sin(ph*DEG2RAD);
+      gradidx++; // increment grad index and check for overflow
+      if (gradidx > gradidxmax)
+        return TclError(interp,"oc_rf_penalty_grad: grad overflow");
+      gradelem[gradidx].re += scl*pwr*pow(am,pwr-2)*wx;
+      gradelem[gradidx].im += scl*pwr*pow(am,pwr-2)*wy;
+    }
+
+  }
+
+  return TCL_OK;
+}
 
 void tclcmd_OCroutines(Tcl_Interp* interp) {
 
@@ -4206,5 +4440,9 @@ Tcl_CreateObjCommand(interp,"oc_gradmode",(Tcl_ObjCmdProc *)tclGradModeSwitch,(C
 Tcl_CreateObjCommand(interp,"TF_line",(Tcl_ObjCmdProc *)tclTFLine,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 Tcl_CreateObjCommand(interp,"oc_rflimit_penalty",(Tcl_ObjCmdProc *)tclLimitPenalty,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 Tcl_CreateObjCommand(interp,"oc_grad_add_rflimit_penalty",(Tcl_ObjCmdProc *)tclGradLimitPenalty,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
+// 1.12.2024 ZT: implementing GROUP optimizations, basis creation
+Tcl_CreateObjCommand(interp,"oc_grad_convert_to_group",(Tcl_ObjCmdProc *)tclGrad2GROUP,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
+Tcl_CreateObjCommand(interp,"oc_rf_penalty",(Tcl_ObjCmdProc *)tclRFpenalty,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
+Tcl_CreateObjCommand(interp,"oc_rf_penalty_grad",(Tcl_ObjCmdProc *)tclRFpenaltyGrad,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 
 }

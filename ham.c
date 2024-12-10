@@ -39,6 +39,7 @@
 #include "wigner.h"
 #include "spinsys.h"
 #include "defs.h"
+#include "cblas.h"
 
 	/* for acurate timings on windows */
 //#include <windows.h>
@@ -1391,7 +1392,7 @@ void ham_hamilton_integrate(Sim_info *s, Sim_wsp *wsp, double dur)
 {
 	int i, j;
 	double dw, t;
-	complx *d20, R[6], RR[6], I[13], cdw;
+	complx *d20, R[6], RR[6], II[13], cdw;
 	mat_complx *d2=NULL;
 
 	d20 = wigner20(0.0,wsp->brl);
@@ -1403,15 +1404,15 @@ void ham_hamilton_integrate(Sim_info *s, Sim_wsp *wsp, double dur)
 		for (i=0;i<6;i++) {
 			j = i-6;
 			dw = s->wr * (double)j;
-			I[i] = Cmul(Complx(0,1.0/dw),Csub(Cexpi(-(t+dur)*dw),Cexpi(-t*dw)));
+			II[i] = Cmul(Complx(0,1.0/dw),Csub(Cexpi(-(t+dur)*dw),Cexpi(-t*dw)));
 		}
-		I[6] = Complx(dur,0.0);
-		I[7] = Conj(I[5]);
-		I[8] = Conj(I[4]);
-		I[9] = Conj(I[3]);
-		I[10] = Conj(I[2]);
-		I[11] = Conj(I[1]);
-		I[12] = Conj(I[0]);
+		II[6] = Complx(dur,0.0);
+		II[7] = Conj(II[5]);
+		II[8] = Conj(II[4]);
+		II[9] = Conj(II[3]);
+		II[10] = Conj(II[2]);
+		II[11] = Conj(II[1]);
+		II[12] = Conj(II[0]);
 	}
 
 	blk_dm_zero(wsp->ham_blk);
@@ -1501,8 +1502,8 @@ void ham_hamilton_integrate(Sim_info *s, Sim_wsp *wsp, double dur)
 				for (m=0;m<5;m++) {
 					c4 = Cmul(wsp->Q_Rrot[i][m+1],d2->data[m+3*5]);
 					c5 = Cmul(wsp->Q_Rrot[i][m+1],d2->data[m+4*5]);
-					cc2 = Cadd(cc2,Cmul(Cmul(c2,c4),I[l+m+2]));
-					cc1 = Cadd(cc1,Cmul(Cmul(c1,c5),I[l+m+2]));
+					cc2 = Cadd(cc2,Cmul(Cmul(c2,c4),II[l+m+2]));
+					cc1 = Cadd(cc1,Cmul(Cmul(c1,c5),II[l+m+2]));
 				}
 			}
 			//printf("vypis: (%g,%g) a (%g,%g)\n",cc1.re,cc1.im,cc2.re,cc2.im);
@@ -1527,12 +1528,12 @@ void ham_hamilton_integrate(Sim_info *s, Sim_wsp *wsp, double dur)
 					z2c = Cmul(z1c,Cmul(wsp->Q_Rrot[i][m+1],d2->data[m+2*5]));
 					for (n=0; n<5; n++) {
 						z3a = Cmul(z2a,Cmul(wsp->Q_Rrot[i][n+1],d2->data[n+0*5]));
-						cc1 = Cadd(cc1,Cmul(z3a,I[l+m+n]));
+						cc1 = Cadd(cc1,Cmul(z3a,II[l+m+n]));
 						z3b1 = Cmul(z2b1,Cmul(wsp->Q_Rrot[i][n+1],d2->data[n+0*5]));
 						z3b2 = Cmul(z2b2,Cmul(wsp->Q_Rrot[i][n+1],d2->data[n+4*5]));
-						cc2 = Cadd(cc2,Cmul(Cadd(z3b1,z3b2),I[l+m+n]));
+						cc2 = Cadd(cc2,Cmul(Cadd(z3b1,z3b2),II[l+m+n]));
 						z3c = Cmul(z2c,Cmul(wsp->Q_Rrot[i][n+1],d2->data[n+3*5]));
-						cc3 = Cadd(cc3,Cmul(z3c,I[l+m+n]));
+						cc3 = Cadd(cc3,Cmul(z3c,II[l+m+n]));
 					}
 				}
 			}
@@ -1558,8 +1559,8 @@ void ham_hamilton_integrate(Sim_info *s, Sim_wsp *wsp, double dur)
 				for (m=0;m<5;m++) {
 					c3 = Cmul(wsp->CS_Rrot[j2][m+1],d2->data[m+1*5]);
 					c4 = Cmul(wsp->CS_Rrot[j2][m+1],d2->data[m+3*5]);
-					cc1 = Cadd(cc1,Cmul(Cmul(c2,c3),I[l+m+2]));
-					cc1 = Cadd(cc1,Cmul(Cmul(c1,c4),I[l+m+2]));
+					cc1 = Cadd(cc1,Cmul(Cmul(c2,c3),II[l+m+2]));
+					cc1 = Cadd(cc1,Cmul(Cmul(c1,c4),II[l+m+2]));
 				}
 			}
 			blk_dm_multod_diag(wsp->ham_blk,wsp->MT[i],cc1.re/2.0/wsp->Q[j1]->w0);
@@ -1572,8 +1573,8 @@ void ham_hamilton_integrate(Sim_info *s, Sim_wsp *wsp, double dur)
 				for (m=0;m<5;m++) {
 					c3 = Cmul(wsp->DD_Rrot[j2][m+1],d2->data[m+1*5]);
 					c4 = Cmul(wsp->DD_Rrot[j2][m+1],d2->data[m+3*5]);
-					cc1 = Cadd(cc1,Cmul(Cmul(c2,c3),I[l+m+2]));
-					cc1 = Cadd(cc1,Cmul(Cmul(c1,c4),I[l+m+2]));
+					cc1 = Cadd(cc1,Cmul(Cmul(c2,c3),II[l+m+2]));
+					cc1 = Cadd(cc1,Cmul(Cmul(c1,c4),II[l+m+2]));
 				}
 			}
 			//printf("uistup: (%g, %g)\n",cc1.re, cc1.im);
@@ -1595,10 +1596,10 @@ void ham_hamilton_integrate(Sim_info *s, Sim_wsp *wsp, double dur)
 						c4 = Cmul(wsp->DD_Rrot[j2][m+1],d2->data[m+4*5]);
 						z3 = Cmul(wsp->DD_Rrot[j2][m+1],d2->data[m+1*5]);
 						z4 = Cmul(wsp->DD_Rrot[j2][m+1],d2->data[m+0*5]);
-						cc1 = Cadd(cc1,Cmul(Cmul(c1,c3),I[l+m+2]));
-						cc1 = Cadd(cc1,Cmul(Cmul(c2,c4),I[l+m+2]));
-						cc2 = Cadd(cc2,Cmul(Cmul(z1,z3),I[l+m+2]));
-						cc2 = Cadd(cc2,Cmul(Cmul(z2,z4),I[l+m+2]));
+						cc1 = Cadd(cc1,Cmul(Cmul(c1,c3),II[l+m+2]));
+						cc1 = Cadd(cc1,Cmul(Cmul(c2,c4),II[l+m+2]));
+						cc2 = Cadd(cc2,Cmul(Cmul(z1,z3),II[l+m+2]));
+						cc2 = Cadd(cc2,Cmul(Cmul(z2,z4),II[l+m+2]));
 					}
 				}
 				printf("uistup_homo1: (%g, %g)\n",cc1.re, cc1.im);

@@ -18,6 +18,7 @@
 #include "pulse.h"
 #include "fftw3.h"
 #include "spinsys.h"
+#include "cblas.h"
 
 	/* for acurate timings on windows */
 //#define TIMING

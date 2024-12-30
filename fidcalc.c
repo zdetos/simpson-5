@@ -18,7 +18,18 @@
 #include "pulse.h"
 #include "fftw3.h"
 #include "spinsys.h"
+
+#ifdef INTEL_MKL
+#include "mkl.h"
+#include "mkl_spblas.h"
+#elif defined(__APPLE__)
+#include <Accelerate/Accelerate.h>
+#elif defined(GSL)
+#include <gsl/gsl_cblas.h>
+#else
 #include "cblas.h"
+#endif
+
 
 	/* for acurate timings on windows */
 //#define TIMING

@@ -1002,6 +1002,25 @@ int tclGROUPbasisAllocate(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *
   return TclSetResult(interp,"%d",slot);
 }
 
+/* implementation of Tcl group_basis_free routine */
+int tclGROUPbasisFree(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
+{
+  int i, slot;
+
+  if ( (argc < 2) )
+    return TclError(interp,"usage: group_basis_free <basis> ?<basis>? ...");
+
+  for (i=1; i<argc; i++) {
+    if (Tcl_GetIntFromObj(interp,argv[i],&slot) == TCL_ERROR)
+		return TclError(interp,"group_basis_free: argument %d - expecting integer <slot>", i);
+    if (GROUPbasis[slot] != NULL) {
+      free_double_matrix(GROUPbasis[slot]);
+      GROUPbasis[slot] = NULL;
+    }
+  }
+  return TCL_OK;
+}
+
 /* implementation of Tcl group_basis_setrow routine */
 int tclGROUPbasisSetRow(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
 {
@@ -1148,6 +1167,47 @@ int tclGOUPbasisGenerateRFshape(ClientData data,Tcl_Interp* interp,int argc, Tcl
   return TclSetResult(interp,"%d",rfslot);
 }
 
+/* implementation of Tcl group_basis_chebyshev routine */
+int tclGROUPbasisChebyshev(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
+{
+  int slot, Nrows, Ntimes, i, j;
+
+  if ( (argc != 3) )
+    return TclError(interp,"usage: <slot> group_basis_chebyshev <Nrows> <Ntimes>");
+  if (Tcl_GetIntFromObj(interp,argv[1],&Nrows) == TCL_ERROR)
+	return TclError(interp,"group_basis_chebyshev: argument 1 must be integer <num of rows>");
+  if (Tcl_GetIntFromObj(interp,argv[2],&Ntimes) == TCL_ERROR)
+	return TclError(interp,"group_basis_chebyshev: argument 2 must be integer <num of time-slices>");
+
+  // at least two Chebyshev polynomials must be defined
+  if (Nrows<2)
+    return TclError(interp,"group_basis_chebyshev: at least two Chebyshev polynomials must be defined, increae Nrows");
+
+  /* get a new slot and allocate */
+  slot = GROUPbasis_slot();
+  if (slot == -1) {
+	return TclError(interp,"group_basis_chebyshev error: no more free slots available, free some basis first!");
+  }
+  GROUPbasis[slot] = GROUPbasis_alloc(Nrows, Ntimes);
+
+  // set the first two Chebyshev polynomials
+  for (i = 0; i < Ntimes; i++) {
+	  GROUPbasis[slot]->data[i*Nrows] = 1;
+	  GROUPbasis[slot]->data[i*Nrows+1] = 2*(i+0.5)/Ntimes-1;
+  }
+  // recursively generate the rest: T_n = 2x.T_(n-1) - T_(n-2)
+  for (i=2; i<Nrows; i++){
+	  for (j=0; j<Ntimes; j++) {
+		  double x = GROUPbasis[slot]->data[j*Nrows+1]; // x is T_1 polynomial
+		  double x1 = GROUPbasis[slot]->data[j*Nrows+i-1]; // T_(n-1)
+		  double x2 = GROUPbasis[slot]->data[j*Nrows+i-2]; // T_(n-2)
+		  GROUPbasis[slot]->data[j*Nrows+i] = 2*x*x1-x2;
+	  }
+  }
+
+  return TclSetResult(interp,"%d",slot);
+}
+
 
 /* implement new commands */
 void tclcmd_rfshape(Tcl_Interp* interp) {
@@ -1170,8 +1230,10 @@ void tclcmd_rfshape(Tcl_Interp* interp) {
    Tcl_CreateObjCommand(interp,"shape_index_set",(Tcl_ObjCmdProc *)tclShapeIndexSet,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
    // 1.12.2024 ZT: implementing GROUP optimizations, basis creation
    Tcl_CreateObjCommand(interp,"group_basis_alloc",(Tcl_ObjCmdProc *)tclGROUPbasisAllocate,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
+   Tcl_CreateObjCommand(interp,"group_basis_free",(Tcl_ObjCmdProc *)tclGROUPbasisFree,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
    Tcl_CreateObjCommand(interp,"group_basis_setrow",(Tcl_ObjCmdProc *)tclGROUPbasisSetRow,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
    Tcl_CreateObjCommand(interp,"group_basis_save",(Tcl_ObjCmdProc *)tclGOUPbasisSave,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
    Tcl_CreateObjCommand(interp,"group_basis_generate_rfshape",(Tcl_ObjCmdProc *)tclGOUPbasisGenerateRFshape,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
+   Tcl_CreateObjCommand(interp,"group_basis_chebyshev",(Tcl_ObjCmdProc *)tclGROUPbasisChebyshev,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 
 }

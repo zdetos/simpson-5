@@ -60,7 +60,18 @@
 #include "OCroutines.h"
 #include "fidcalc.h"
 #include "pthread_barrier_mac.h"
+
+#ifdef INTEL_MKL
+#include "mkl.h"
+#include "mkl_spblas.h"
+#elif defined(__APPLE__)
+#include <Accelerate/Accelerate.h>
+#elif defined(GSL)
+#include <gsl/gsl_cblas.h>
+#else
 #include "cblas.h"
+#endif
+
 
 //extern void simpson_nfft_test(void);
 

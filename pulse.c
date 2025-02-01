@@ -3545,6 +3545,370 @@ int tclTestFunc(ClientData data,Tcl_Interp* interp,int objc, Tcl_Obj *objv[])
 
 	return TCL_OK;
 }
+/* ZT: single purpose shaped pulse for testing 3-point rule of propagation
+ *     Assumes shaped pulse elements are one maxdt long and constant
+ *     Evaluates interaction Hamiltonian in left, middle, and right points
+ *     Accepting possible trouble arising from discontinuity of rf field between shape elements
+ */
+void local_prop_complx(mat_complx *prop, mat_complx *ham, double dt)
+{
+	int i;
+	int dim = ham->row;
+	double *eigs=double_vector(dim);
+	mat_complx *T=complx_matrix(dim,dim,MAT_DENSE,0,ham->basis);
+
+	cm_muld(ham,dt);
+	//cm_print(ham,"------> H*dt");
+	cm_diag_hermit(ham,eigs,T);
+	//for (i=1; i<=dim; i++) printf("   eig[%i] = (%g,%g)\n",i,eigs[i].re,eigs[i].im);
+	//cm_print(T,"====> T");
+	if (prop->type != MAT_DENSE_DIAG) {
+		mat_complx *dum = complx_matrix(dim,dim,MAT_DENSE_DIAG, dim, ham->basis);
+		cm_swap_innards_and_destroy(prop,dum);
+	}
+	prop->basis = ham->basis;
+	for (i=0; i<dim; i++) {
+		prop->data[i] = Cexpi(-eigs[i+1]);
+	}
+	//cm_print(prop,"+++++>prop");
+	simtrans(prop,T);
+	free_double_vector(eigs);
+	free_complx_matrix(T);
+	//cm_print(prop,"~~~~~> prop");
+}
+void _pulse_simple_3pointruleconstantrf(Sim_info *sim, Sim_wsp *wsp, double duration)
+{
+	/* this assumes that wsp->sumHrf and wsp->sumUph are already made */
+	int i, n;
+	double dt, dt_us;
+	blk_mat_double *Hleft, *Hmiddle, *Hright, *Htemp;
+
+	// initialization and allocation
+	assert(wsp->dU != NULL);
+	assert(wsp->dU->Nblocks == 1); // assume no blockdiagonalization in the current implementation
+	assert(wsp->ham_blk->Nblocks == 1); // assume no blockdiagonalization in the current implementation
+	assert(wsp->sumHrf->Nblocks == 1); // assume no blockdiagonalization in the current implementation
+	blk_cm_unit(wsp->dU);
+	Hleft = create_blk_mat_double_copy(wsp->ham_blk);
+	Hmiddle = create_blk_mat_double_copy(wsp->ham_blk);
+	Hright = create_blk_mat_double_copy(wsp->ham_blk);
+	if (wsp->Hcplx == NULL) {
+		wsp->Hcplx = create_blk_mat_complx_copy2(wsp->ham_blk);
+	}
+
+	// split duration in maxdt elements
+	n = (int)ceil(duration/wsp->dtmax);
+	if (n < 1) n = 1; // use 3point rule also for short durations (<maxdt)
+	dt_us = duration/(double)n;
+	dt = dt_us*1.0e-6;
+	//printf("_pulse_simple_3pointruleconstantrf duration of %f us split into %d steps of %f us\n",duration,n,dt*1.0e+6);
+	// create LEFT hamiltonian
+	Htemp = wsp->ham_blk;
+	wsp->ham_blk = Hleft;
+	ham_hamilton(sim,wsp);
+	blk_dm_multod(Hleft,wsp->sumHrf,1.0);
+	for (i=1;i<=n;i++) {
+		// create MIDDLE hamiltonian
+		wsp->t += dt_us/2.0;
+		Htemp = wsp->ham_blk;
+		wsp->ham_blk = Hmiddle;
+		ham_hamilton(sim,wsp);
+		blk_dm_multod(Hmiddle,wsp->sumHrf,1.0);
+		// create RIGHT hamiltonian
+		wsp->t += dt_us/2.0;
+		wsp->ham_blk = Hright;
+		ham_hamilton(sim,wsp);
+		blk_dm_multod(Hright,wsp->sumHrf,1.0);
+		// create exponent for propagation
+		blk_cm_zero(wsp->Hcplx);
+		cm_multocr(wsp->Hcplx->m, Hleft->m, Complx(1.0/6.0,0));
+		cm_multocr(wsp->Hcplx->m, Hmiddle->m, Complx(4.0/6.0,0));
+		cm_multocr(wsp->Hcplx->m, Hright->m, Complx(1.0/6.0,0));
+		mat_double *dum = dm_commutator(Hleft->m,Hright->m);
+		cm_multocr(wsp->Hcplx->m, dum, Complx(0.0,1.0/12.0*dt));
+		free_double_matrix(dum);
+		// calculate propagator
+		//blk_cm_print(wsp->Hcplx,"Hamiltonian");
+		//blk_cm_print(wsp->dU,"propagator");
+		//blk_prop_complx_3(wsp->dU,wsp->Hcplx,dt,sim);
+			mat_complx *cum = complx_matrix(wsp->Hcplx->blk_dims[0],wsp->Hcplx->blk_dims[0],MAT_DENSE_DIAG, 0, wsp->Hcplx->basis);
+			local_prop_complx(cum,wsp->Hcplx->m,dt);
+			cm_multo_rev(wsp->dU->m,cum);
+			free_complx_matrix(cum);
+		//blk_cm_print(wsp->dU,"updated propagator");
+		//printf("time step is %g\n",dt);
+		//exit(1);
+		// swap Hleft and Hright
+		wsp->ham_blk = Htemp;
+		Htemp = Hleft;
+		Hleft = Hright;
+		Hright = Htemp;
+	}
+	// add phase of the pulse element
+	blk_simtrans_zrot2(wsp->dU,wsp->sumUph);
+}
+void _pulse_shaped_3pointruleconstantrf(Sim_info *sim, Sim_wsp *wsp, int Nelem, int *mask, double duration)
+{
+	int i, j, ii, n;
+	double dt, t_tmp;
+
+	for (j=1; j<=Nelem; j++) {
+		// this prepares RF Hamiltonian data for using the trick of real interaction Hamiltonian
+		//  commuting with Iz operator, so the rf phase can be applied after the propagator
+		//  is calculated from a real matrix
+		for (i=1; i<=sim->ss->nchan; i++) {
+			if (mask[i] == -1) {
+				_rf(wsp,i,0.0);
+				_ph(wsp,i,0.0);
+			} else {
+				_rf(wsp,i,RFshapes[mask[i]][j].ampl);
+				_ph(wsp,i,RFshapes[mask[i]][j].phase);
+			}
+		}
+		// replace _pulse with new calculations
+		//_pulse(sim,wsp,steptime);
+		// new calculations start here; just replacing _pulse_simple for _pulse_simple_3pointruleconstantrf
+		_setrfprop(sim,wsp); //use this and do not care about possible zero rf amplitudes
+
+		if (wsp->evalmode == EM_ACQBLOCK) {
+			if ( fabs(wsp->t - wsp->acqblock_t0) > TINY ) {
+				/* there was some previous event not synchronized with dw */
+				dt = wsp->dw - (wsp->t - wsp->acqblock_t0);
+				if ( duration < dt) {
+					_pulse_simple_3pointruleconstantrf(sim,wsp,duration);
+					t_tmp = 0;
+				} else {
+					_pulse_simple_3pointruleconstantrf(sim,wsp,dt);
+					t_tmp = duration - dt;
+				}
+				update_propagator(wsp->U, wsp->dU, sim, wsp);
+				/* did it fill time up to dw? */
+				if (fabs(wsp->t - wsp->acqblock_t0 - wsp->dw) < TINY*2 ) {
+					_store(sim,wsp,wsp->acqblock_sto,0);
+					wsp->acqblock_t0 = wsp->t;
+					acqblock_sto_incr(wsp);
+				}
+			} else {
+				t_tmp = duration;
+			}
+			if ( fabs(t_tmp) > TINY) {
+				n = (int)floor(t_tmp/wsp->dw+1e-6);
+				dt = t_tmp - wsp->dw*(double)n;
+				for (ii=1; ii<=n; ii++) {
+					_pulse_simple_3pointruleconstantrf(sim,wsp,wsp->dw);
+					update_propagator(wsp->U, wsp->dU, sim, wsp);
+					_store(sim,wsp,wsp->acqblock_sto,0);
+					wsp->acqblock_t0 = wsp->t;
+					acqblock_sto_incr(wsp);
+				}
+				if (dt > TINY) {
+					/* remaining time not synchronized with dw */
+					_pulse_simple_3pointruleconstantrf(sim,wsp,dt);
+					update_propagator(wsp->U, wsp->dU, sim, wsp);
+				}
+			}
+		} else {
+			_pulse_simple_3pointruleconstantrf(sim,wsp,duration);
+			update_propagator(wsp->U, wsp->dU, sim, wsp);
+		}
+		wsp->waspulse += 1;
+		// new calculations end here
+	}
+	/* if used within pulseq optimizing propagator set this flag */
+	if (OCpar.gradmodeprop) {
+		wsp->OC_propstatus = 1;
+	}
+ /*** END of _pulse***/
+}
+int tclPulseShaped3PointRuleConstantRF(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
+{
+  int i, j, slot, Nelem=-1, Nch=0, basis=0;
+  double duration, steptime;
+  int *mask, *OCchanmap = NULL;
+  char cd[128], buf2[64];;
+  Sim_info *sim = NULL;
+  Sim_wsp *wsp = NULL;
+  const char *cmdname = "pulse_shaped_3pointruleconstantrf";
+
+  read_sim_pointers(interp, &sim, &wsp);
+  spinach_disable_command(sim,"pulse_shaped");
+
+  /* disable when relaxation is ON */
+  if (sim->relax) {
+	  return TclError(interp,"%s error: not supported in combination with relaxation.\n",cmdname);
+  }
+  if (sim->frame != ROTFRAME) {
+	  return TclError(interp,"%s error: works only in ROTFRAME.\n",cmdname);
+  }
+  if (sim->imethod != M_DIRECT_TIME) {
+	  return TclError(interp,"%s error: works only with direct method in time domain.\n",cmdname);
+  }
+
+  mask = int_vector(sim->ss->nchan);
+  /* READING ARGUMENTS  */
+  if (argc <= 2)
+    return TclError(interp,"Usage: %s <duration/usec> <RFshape on channel 1> ?<RFshape on channel 2>? ...",cmdname);
+  if (argc-2 != sim->ss->nchan)
+    return TclError(interp,"\nerror: %s: arguments must match number of channels\n"
+                            "        use 'nothing' as place holder when no rf is applied\n",cmdname);
+  if (Tcl_GetDoubleFromObj(interp,argv[1],&duration) != TCL_OK)
+     return TCL_ERROR;
+  if (duration < 0.0)
+      return TclError(interp,"%s: duration must be zero or positive",cmdname);
+
+  for (i=1; i<=sim->ss->nchan; i++) {
+     if (!strcmp(Tcl_GetString(argv[i+1]),"nothing")) {
+        mask[i] = -1;
+        basis += 1 << (i-1); // use channels with no rf for blocking
+	    DEBUGPRINT("Channel %d: no rf applied\n",i);
+	    continue;
+     } else {
+        /* read RFshape and check it */
+        if (Tcl_GetIntFromObj(interp,argv[i+1],&slot) != TCL_OK) {
+           return TclError(interp,"error in %s: argument %d must be integer <RFshape>",cmdname,i+1 );
+        }
+	    if (!RFshapes[slot]) {
+           return TclError(interp,"%s: argument %d points to non-existing RFshape",cmdname,i+1);
+	    }
+	    if (Nelem == -1) {
+	    	/* set variable for length of RFshapes */
+	    	Nelem=RFshapes_len(slot);
+	    } else {
+	    	/* check consistency of RFshape lengths */
+	    	if ( RFshapes_len(slot) != Nelem )
+	    		return TclError(interp,"%s: inconsistent number of elements in RFshapes!",cmdname);
+	    }
+        DEBUGPRINT("Channel %d: Number of elements in the RFshape = %d\n",i-1,Nelem);
+        mask[i] = slot;
+     }
+   }
+
+  if (sim->Nmz > sim->ss->nchan) {
+	  // use dummy channels for blocking
+	  for (i=sim->ss->nchan; i<sim->Nmz; i++) basis += 1 << i;
+  }
+
+  if (wsp->evalmode == EM_MEASURE) {
+	  wsp->t += duration;
+	  free_int_vector(mask);
+	  return TCL_OK;
+  }
+
+   steptime = duration/Nelem;
+
+   if (sim->block_diag) {
+	   change_basis_pulse(sim, wsp, basis);
+	   if (wsp->U == NULL) wsp->U = create_blk_mat_complx_copy2(wsp->ham_blk);
+	   if (wsp->dU == NULL) wsp->dU = create_blk_mat_complx_copy2(wsp->ham_blk);
+	   //if (wsp->tmpU == NULL) wsp->tmpU = create_blk_mat_complx_copy2(wsp->ham_blk);
+   }
+
+   if (OCpar.gradmode) {
+      DEBUGPRINT("%s does gradients\n",cmdname);
+      /* determine which channels are active for gradients */
+      if (!OCpar.grad_shapes)
+         return TclError(interp,"error when calculating propagators for gradients: grad_shapes not defined");
+      int Nsh=LEN(OCpar.grad_shapes);
+      if (fabs(OCpar.grad_level-1)<1e-3) { /* original GRAPE ala Khaneja */
+    	  cd[0]='\0';
+    	  for (i=1; i<=sim->ss->nchan; i++) {
+    		  for (j=1; j<=Nsh; j++) {
+    			  if (OCpar.grad_shapes[j] == mask[i]) {
+    				  sprintf(buf2," I%dC%d",j,i);
+    				  strcat(cd,buf2);
+    				  Nch++;
+    				  break;
+    			  }
+    		  }
+    	  }
+    	  /* check if there is any gradient to calculate */
+    	  if (Nch==0) {
+    		  /* no, then do usual things */
+    		  DEBUGPRINT("%s - no variable shapes, just creates propagator\n",cmdname);
+    		  _pulse_shaped_3pointruleconstantrf(sim,wsp,Nelem, mask, steptime);
+    	  } else {
+    		  /* yes, check for type of optimization */
+    		  DEBUGPRINT("%s created code '%s'\n",cmdname,cd);
+    		  if ( OCpar.gradmodeprop == 1 ) {
+    			  /* do stuff for propagator optimization */
+    			  return TclError(interp,"%s: OC of prop ala Khaneja NOT implemented!",cmdname);
+    			  //_pulse_shapedOCprops(sim,wsp,cd,Nch,Nelem,mask,steptime);
+    		  } else {
+    			  /* do stuff for state to state optimization */
+    			  return TclError(interp,"%s: OC state-state ala Khaneja NOT implemented!",cmdname);
+    			  //_pulse_shapedOC(sim,wsp,cd,Nch,Nelem,mask,steptime);
+    		  }
+    	  }
+      } else { /* GRAPE with advanced gradients */
+    	  OCchanmap = int_vector(Nsh);
+    	  for (i=1; i<=Nsh; i++) {
+    		  OCchanmap[i] = -1;
+    		  //printf("grad_shapes[%d] = %d \n",i,OCpar.grad_shapes[i]);
+    		  for (j=1; j<=sim->ss->nchan; j++) {
+        		  //printf("\t mask[%d] = %d \n",j,mask[j]);
+    			  if (OCpar.grad_shapes[i] == mask[j]) {
+    				  OCchanmap[i] = j;
+    				  Nch++;
+        			  break;
+    			  }
+    		  }
+    		  //printf("\t OCchanmap[%d] = %d \n",i,OCchanmap[i]);
+    	  }
+    	  if (Nch == 0) {
+    		  _pulse_shaped_3pointruleconstantrf(sim,wsp,Nelem, mask, steptime);
+    	  } else {
+    		  if ( OCpar.gradmodeprop == 1 ) {
+    			  /* do stuff for propagator optimization */
+    			  return TclError(interp,"%s: OC of prop with advanced grads NOT implemented!",cmdname);
+    			  /***
+    			  switch (sim->frame) {
+    			  case ROTFRAME:
+    				  _pulse_shapedOCprops_2(sim,wsp,Nelem,OCchanmap,mask,steptime);
+    				  break;
+    			  case DNPFRAME:
+    			  case LABFRAME:
+    				  fprintf(stderr,"Error: optimal control on propagators not supported in DNP/LAB frames (checkpoint tclPulseShaped)\n");
+    				  exit(1);
+    				  break;
+    			  default:
+    				  fprintf(stderr,"Error: unknown calculation frame %d (checkpoint tclPulseShaped 1)\n",sim->frame);
+    				  exit(1);
+    			  }
+    			  ***/
+    		  } else {
+    			  /* do stuff for state to state optimization */
+    			  return TclError(interp,"%s: OC of state-state with advanced grads NOT implemented!",cmdname);
+    			  /***
+    			  switch (sim->frame) {
+    			  case ROTFRAME:
+    				  _pulse_shapedOC_2(sim,wsp,Nelem,OCchanmap,mask,steptime);
+    				  break;
+    			  case DNPFRAME:
+    				  _pulse_shapedOC_2_dnpframe(sim,wsp,Nelem,OCchanmap,mask,steptime);
+    				  break;
+    			  case LABFRAME:
+    				  fprintf(stderr,"Error: optimal control not supported in LABframe (checkpoint tclPulseShaped)\n");
+    				  exit(1);
+    				  break;
+    			  default:
+    				  fprintf(stderr,"Error: unknown calculation frame %d (checkpoint tclPulseShaped 1)\n",sim->frame);
+    				  exit(1);
+    			  }
+    			  ***/
+    		  }
+    	  }
+    	  free_int_vector(OCchanmap);
+      }
+   } else {
+      /* do just actual pulsing */
+      _pulse_shaped_3pointruleconstantrf(sim,wsp,Nelem, mask, steptime);
+   }
+
+  free_int_vector(mask);
+
+  return TCL_OK;
+}
+
 
 void tclcmd_pulse(Tcl_Interp* interp) {
 
@@ -3587,8 +3951,9 @@ Tcl_CreateObjCommand(interp,"pulse_and_zgrad_shaped",(Tcl_ObjCmdProc *)tclPulseZ
 Tcl_CreateObjCommand(interp,"acq_block",(Tcl_ObjCmdProc *)tclAcqBlock,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 Tcl_CreateObjCommand(interp,"acq_modulus",(Tcl_ObjCmdProc *)tclAcqModulus,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 Tcl_CreateObjCommand(interp,"pulse_shaped_rotormodulated",(Tcl_ObjCmdProc *)tclPulseShapedRotorModulated,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
-Tcl_CreateObjCommand(interp,"pulse_shaped_linear",(Tcl_ObjCmdProc *)tclPulseShapedRotorModulatedLinear,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 
 Tcl_CreateObjCommand(interp,"test_function",(Tcl_ObjCmdProc *)tclTestFunc,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
+Tcl_CreateObjCommand(interp,"pulse_shaped_linear",(Tcl_ObjCmdProc *)tclPulseShapedRotorModulatedLinear,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
+Tcl_CreateObjCommand(interp,"pulse_shaped_3pointruleconstantrf",(Tcl_ObjCmdProc *)tclPulseShaped3PointRuleConstantRF,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 
 }

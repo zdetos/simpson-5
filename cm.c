@@ -33,6 +33,8 @@
 	void zlarcm_(const int *K,const int *L,double *a,const int *M,void *cm,const int *ldcm,void *res,const int *ldres, double *dwsp);
 	void dsyevr_(const char *job, const char *range, const char *uplo,const int *K, double *A, const int *LDA, double *VL, double *VU, const int *IL, const int *IU, double *ABSTOL, int *M, double *W, double *Z, int *LDZ, int *ISUPPZ, double *WORK, int *LWORK, int *IWORK, int *LIWORK, int *INFO);
 	//dsyevr_("V","I","U",&dim,ham->data,&dim,NULL,NULL,&i,&dim,&abstol,&j,eigs,T->data,&dim,isupp,&wkopt,&lwork,&iwkopt,&liwork, &info);
+	void zheev_(const char *job,const char *uplo,const int *K,void *data,const int *lda,double *eigs,
+			void *wsp,const int *lwsp,double *rwork,const int *info);
 #endif
 #include "defs.h"
 #include "auxmath.h"
@@ -3827,6 +3829,21 @@ void cm_multo_rev(mat_complx *m1, mat_complx *m2)
 	if (m1->type == MAT_SPARSE || m1->type == MAT_SPARSE_DIAG) cm_sparse(m1,SPARSE_TOL);
 }
 
+mat_double * dm_commutator(mat_double *a, mat_double *b)
+{
+	/* this is not the best code for dense matrices... */
+	mat_double *dum, *res;
+
+	assert(a->basis == b->basis);
+
+	dum = dm_mul(b,a);
+	res = dm_mul(a,b);
+	dm_multod(res,dum,-1.0);
+	free_double_matrix(dum);
+	if (res->type == MAT_SPARSE || res->type == MAT_SPARSE_DIAG) dm_sparse(res, SPARSE_TOL);
+	return res;
+}
+
 mat_complx * cm_commutator(mat_complx *a, mat_complx *b)
 {
 	/* this is not the best code for dense matrices... */
@@ -4248,6 +4265,54 @@ void cm_diag(mat_complx *m, complx *eigs, mat_complx *T)
 	free(rwork);
 
 	TIMING_TOC(tv1,tv2,"cm_diag");
+}
+
+void cm_diag_hermit(mat_complx *m, double *eigs, mat_complx *T)
+{
+	/* this is called only with non-diagonal matrices */
+	assert( (m->type != MAT_DENSE_DIAG) && (m->type != MAT_SPARSE_DIAG));
+
+	if (m->row != m->col) {
+		fprintf(stderr,"Error: cm_diag - non-square matrix (%d,%d)\n",m->row,m->col);
+		exit(1);
+	}
+
+	mat_complx *dum;
+	const int dim = m->row, lwsp = 3*dim;
+	int info=0;
+	complx *wsp = (complx*)malloc(lwsp*sizeof(complx));
+	double *rwork = (double*)malloc(lwsp*sizeof(double));
+
+	if (m->type == MAT_SPARSE) {
+		printf("WARNING!!! In order to diagonalize the matrix (dim = %d) I need to \n"
+			   "convert it from sparse to full format. The whole operation may take long time...\n",dim);
+		dum = cm_dup(m);
+		cm_dense(dum);
+	} else {
+		dum = cm_dup(m);
+	}
+
+	if (LEN(eigs) != dim) {
+		fprintf(stderr,"Error: cm_diag - wrong dimension of eigs\n");
+		exit(1);
+	}
+	if (T->row != dim || T->col != dim || T->type != MAT_DENSE) {
+		fprintf(stderr,"Error: cm_diag - wrong dimension or type of T (%d,%d)\n",T->row,T->col);
+		exit(1);
+	}
+	T->basis = m->basis;
+
+	zheev_("V","U",&dim,dum->data,&dim,&(eigs[1]),wsp,&lwsp,rwork,&info);
+
+	if ( info != 0) {
+		fprintf(stderr,"cm_diaghermit error: diagonalization failed with the code '%d'\n", info);
+	    exit(1);
+	}
+	// dum now holds eigenvectors, need to copy them out
+	cm_copy(T,dum);
+	free_complx_matrix(dum);
+	free(wsp);
+	free(rwork);
 }
 
 double cm_sumnorm1(mat_complx *m)
@@ -6042,10 +6107,10 @@ void prop_complx(mat_complx *prop, mat_complx *ham, double dt, int method)
 			mat_complx *T=complx_matrix(dim,dim,MAT_DENSE,0,ham->basis);
 			int i;
 			cm_muld(ham,dt);
-		//cm_print(ham,"------> H*0.01");
+		//cm_print(ham,"------> H*dt");
 			cm_diag(ham,eigs,T);
 		//for (i=1; i<=dim; i++) printf("   eig[%i] = (%g,%g)\n",i,eigs[i].re,eigs[i].im);
-		//cm_print(T,"====> T");
+		cm_print(T,"====> T");
 			if (prop->type != MAT_DENSE_DIAG) {
 				mat_complx *dum = complx_matrix(dim,dim,MAT_DENSE_DIAG, dim, ham->basis);
 				cm_swap_innards_and_destroy(prop,dum);
@@ -6059,7 +6124,7 @@ void prop_complx(mat_complx *prop, mat_complx *ham, double dt, int method)
 			simtrans(prop,T);
 			free_complx_vector(eigs);
 			free_complx_matrix(T);
-		//cm_print(prop,"~~~~~> prop");
+		cm_print(prop,"~~~~~> prop");
 			break; }
 		case MAT_SPARSE : {
 			/* this is just Taylor */

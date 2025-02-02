@@ -3800,7 +3800,6 @@ int tclPulseShaped3PointRuleConstantRF(ClientData data,Tcl_Interp* interp,int ar
 	   change_basis_pulse(sim, wsp, basis);
 	   if (wsp->U == NULL) wsp->U = create_blk_mat_complx_copy2(wsp->ham_blk);
 	   if (wsp->dU == NULL) wsp->dU = create_blk_mat_complx_copy2(wsp->ham_blk);
-	   //if (wsp->tmpU == NULL) wsp->tmpU = create_blk_mat_complx_copy2(wsp->ham_blk);
    }
 
    if (OCpar.gradmode) {
@@ -3910,6 +3909,147 @@ int tclPulseShaped3PointRuleConstantRF(ClientData data,Tcl_Interp* interp,int ar
 }
 
 
+/*****
+ * Implementation of special purpose pulse_shaped_3pointrulerfmap command
+ * Intention: test 3-point rule propagation over one single element of the
+ * shaped pulse. And, optimal control.
+ * Restrictions: when rf shape has N elements in one rotor period,
+ *   rfmap MUST have 2*N elements over one rotor period
+ * RF parameters are assumed constant over those 3 points, accepting discontinuity
+ *   between pulse elements.
+ */
+void _pulse_shaped_3pointrulerfmap(Sim_info *sim, Sim_wsp *wsp, int Nelem, int *mask, double duration)
+{
+	int j, iz, iphi, Nphi, iphi_shift;
+	double phitime;
+
+	/*** rfmap data coordinates and book keeping; check of timings done before! ***/
+	iz = sim->rfmap->loop[(wsp->rf_idx)*2+0];   // z coil coordinate index
+	iphi = sim->rfmap->loop[(wsp->rf_idx)*2+1]; // coil initial "phase" index
+	Nphi = sim->rfmap->z[iz*(sim->rfmap->Nch+1)+sim->rfmap->Nch]; // number of phi elements for current z position
+	//double steptimephi = sim->taur/Nphi;
+	iphi_shift = 0;
+	phitime = 0.0;
+	// NOTE: allow for Nphi == 1, i.e. no modulations in rfmap !!!
+
+	for (j=1; j<=Nelem; j++) { // main loop over all shape elements
+		// read rfmap coefficients for all channels
+		// modify rf shape parameters, including the middle point
+		// create the three Hrf hamiltonians
+		// create the three interaction Hamiltonians
+		// combine all into comples exponent
+		// calculate propagator of rf element and update the total propagator
+	} // end of loop over shape elements
+}
+int tclPulseShaped3PointRuleRFmap(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
+{
+	int i, j, slot, iz, Nphi, Nelem=-1, Nch=0, basis=0;
+	double duration, steptime, steptimephi;
+	int *mask, *OCchanmap = NULL;
+	Sim_info *sim = NULL;
+	Sim_wsp *wsp = NULL;
+	const char *cmdname = "pulse_shaped_3pointrulerfmap";
+
+	read_sim_pointers(interp, &sim, &wsp);
+	spinach_disable_command(sim,cmdname);
+
+	/* disable when relaxation is ON */
+	if (sim->relax) {
+		return TclError(interp,"%s error: not supported in combination with relaxation.\n",cmdname);
+	}
+	if (sim->frame != ROTFRAME) {
+		return TclError(interp,"%s error: works only in ROTFRAME.\n",cmdname);
+	}
+	if (sim->imethod != M_DIRECT_TIME) {
+		return TclError(interp,"%s error: works only with direct method in time domain.\n",cmdname);
+	}
+
+	mask = int_vector(sim->ss->nchan);
+	/***** READING ARGUMENTS  start ****/
+	if (argc <= 2)
+		return TclError(interp,"Usage: %s <duration/usec> <RFshape on channel 1> ?<RFshape on channel 2>? ...",cmdname);
+	if (argc-2 != sim->ss->nchan)
+		return TclError(interp,"\nerror: %s: arguments must match number of channels\n"
+	                            "        use 'nothing' as place holder when no rf is applied\n",cmdname);
+	if (Tcl_GetDoubleFromObj(interp,argv[1],&duration) != TCL_OK)
+		return TclError(interp,"%s: cannot convert duration to double\n",cmdname);
+	if (duration < 0.0)
+		return TclError(interp,"%s: duration must be zero or positive",cmdname);
+	// read shpaes for all channels
+	for (i=1; i<=sim->ss->nchan; i++) {
+		if (!strcmp(Tcl_GetString(argv[i+1]),"nothing")) {
+			mask[i] = -1;
+	        basis += 1 << (i-1); // use channels with no rf for blocking
+		    DEBUGPRINT("Channel %d: no rf applied\n",i);
+		    continue;
+		} else {
+			/* read RFshape and check it */
+			if (Tcl_GetIntFromObj(interp,argv[i+1],&slot) != TCL_OK) {
+				return TclError(interp,"error in %s: argument %d must be integer <RFshape>",cmdname,i+1 );
+	        }
+		    if (!RFshapes[slot]) {
+		    	return TclError(interp,"%s: argument %d points to non-existing RFshape",cmdname,i+1);
+		    }
+		    if (Nelem == -1) {
+		    	/* set variable for length of RFshapes */
+		    	Nelem=RFshapes_len(slot);
+		    } else {
+		    	/* check consistency of RFshape lengths */
+		    	if ( RFshapes_len(slot) != Nelem )
+		    		return TclError(interp,"%s: inconsistent number of elements in RFshapes!",cmdname);
+		    }
+		    DEBUGPRINT("Channel %d: Number of elements in the RFshape = %d\n",i-1,Nelem);
+		    mask[i] = slot;
+		}
+	}
+	/****** reading parameters DONE here ***/
+
+	if (wsp->evalmode == EM_MEASURE) {
+		wsp->t += duration;
+		free_int_vector(mask);
+		return TCL_OK;
+	}
+
+	/* disable when block diagonalization is active */
+	if (sim->block_diag) {
+		return TclError(interp,"%s: not supported in combination with block diagonalization feature", cmdname);
+		/* remove blockdiag related code
+		change_basis_pulse(sim, wsp, basis);
+		if (wsp->U == NULL) wsp->U = create_blk_mat_complx_copy2(wsp->ham_blk);
+		if (wsp->dU == NULL) wsp->dU = create_blk_mat_complx_copy2(wsp->ham_blk);
+		END: blockdiag related code */
+	}
+	/* remove blockdiag related code
+	if (sim->Nmz > sim->ss->nchan) {
+		// use dummy channels for blocking
+		for (i=sim->ss->nchan; i<sim->Nmz; i++) basis += 1 << i;
+	}
+    END: blockdiag related code */
+
+	/*** check timings of shaped pulse and rfmap ***/
+	steptime = duration/Nelem;
+	iz = sim->rfmap->loop[(wsp->rf_idx)*2+0];   // z coil coordinate index
+	Nphi = sim->rfmap->z[iz*(sim->rfmap->Nch+1)+sim->rfmap->Nch]; // number of phi elements for current z position
+	steptimephi = sim->taur/Nphi;
+	if (Nphi > 1) { // allow for no modulations with rotation
+		if (fabs(steptime - 2*steptimephi) > TINY) {
+			return TclError(interp,"%s: bad timing of shape and rfmap. Pulse %g, rfmap %g\n", cmdname, steptime, steptimephi);
+		}
+	}
+
+
+	if (OCpar.gradmode) {
+		return TclError(interp,"%s: not yet supported in combination with OC", cmdname);
+	} else {
+		/* do just actual pulsing */
+		_pulse_shaped_3pointrulerfmap(sim, wsp, Nelem, mask, steptime);
+	}
+
+	free_int_vector(mask);
+	return TCL_OK;
+}
+/**** END of pulse_shaped_3pointrulerfmap implementation *****/
+
 void tclcmd_pulse(Tcl_Interp* interp) {
 
   Tcl_CreateObjCommand(interp,"filter",(Tcl_ObjCmdProc *)tclFilter,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
@@ -3955,5 +4095,6 @@ Tcl_CreateObjCommand(interp,"pulse_shaped_rotormodulated",(Tcl_ObjCmdProc *)tclP
 Tcl_CreateObjCommand(interp,"test_function",(Tcl_ObjCmdProc *)tclTestFunc,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 Tcl_CreateObjCommand(interp,"pulse_shaped_linear",(Tcl_ObjCmdProc *)tclPulseShapedRotorModulatedLinear,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 Tcl_CreateObjCommand(interp,"pulse_shaped_3pointruleconstantrf",(Tcl_ObjCmdProc *)tclPulseShaped3PointRuleConstantRF,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
+Tcl_CreateObjCommand(interp,"pulse_shaped_3pointrulerfmap",(Tcl_ObjCmdProc *)tclPulseShaped3PointRuleRFmap,(ClientData)NULL,(Tcl_CmdDeleteProc*)NULL);
 
 }

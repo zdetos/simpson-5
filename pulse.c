@@ -3646,6 +3646,10 @@ void _pulse_simple_3pointruleconstantrf(Sim_info *sim, Sim_wsp *wsp, double dura
 	}
 	// add phase of the pulse element
 	blk_simtrans_zrot2(wsp->dU,wsp->sumUph);
+	// cleaning memory
+	free_blk_mat_double(Hleft);
+	free_blk_mat_double(Hmiddle);
+	free_blk_mat_double(Hright);
 }
 void _pulse_shaped_3pointruleconstantrf(Sim_info *sim, Sim_wsp *wsp, int Nelem, int *mask, double duration)
 {
@@ -3918,32 +3922,135 @@ int tclPulseShaped3PointRuleConstantRF(ClientData data,Tcl_Interp* interp,int ar
  * RF parameters are assumed constant over those 3 points, accepting discontinuity
  *   between pulse elements.
  */
+void local_setrfprop_complex(Sim_info *sim, Sim_wsp *wsp, blk_mat_complx *HRF)
+{  // creates RF Hamiltonian in wsp->Hrf_blk, ignores selective pulses
+	int i;
+
+	assert(HRF->Nblocks == 1); // assume no blockdiagonalization in the current implementation
+	blk_cm_zero(HRF);
+	dm_zero(wsp->sumUph);
+
+	for (i=1; i<=sim->ss->nchan; i++) {
+		cm_multocr(HRF->m, wsp->chan_Ix[i], Complx(wsp->rfv[i],0));
+		dm_multod(wsp->sumUph, wsp->chan_Iz[i], wsp->phv[i]);
+	}
+	// apply phases as z-rotation
+	blk_simtrans_zrot2(HRF,wsp->sumUph);
+}
 void _pulse_shaped_3pointrulerfmap(Sim_info *sim, Sim_wsp *wsp, int Nelem, int *mask, double duration)
 {
-	int j, iz, iphi, Nphi, iphi_shift;
-	double phitime;
+	int j, iz, iphi, iphi_shift, chan;
+	double steptimephi, bx, by, am, ph;
+	blk_mat_complx *Hleft, *Hmiddle, *Hright;
+	mat_complx *cmat;
+	int Nchan = sim->ss->nchan;
+	double dt = duration*1e-6; // element duration in seconds
+
+	if (wsp->evalmode == EM_ACQBLOCK) {
+		fprintf(stderr,"pulse_shaped_3pointrulerfmap cannot be used inside acq_block\n");
+		exit(1);
+	}
+
+	// initialization and allocation
+	assert(wsp->dU != NULL);
+	assert(wsp->dU->Nblocks == 1); // assume no blockdiagonalization in the current implementation
+	assert(wsp->ham_blk->Nblocks == 1); // assume no blockdiagonalization in the current implementation
+	blk_cm_unit(wsp->dU);
+	Hleft = create_blk_mat_complx_copy2(wsp->ham_blk);
+	Hmiddle = create_blk_mat_complx_copy2(wsp->ham_blk);
+	Hright = create_blk_mat_complx_copy2(wsp->ham_blk);
+	if (wsp->Hcplx == NULL) {
+		wsp->Hcplx = create_blk_mat_complx_copy2(wsp->ham_blk);
+	}
 
 	/*** rfmap data coordinates and book keeping; check of timings done before! ***/
 	iz = sim->rfmap->loop[(wsp->rf_idx)*2+0];   // z coil coordinate index
 	iphi = sim->rfmap->loop[(wsp->rf_idx)*2+1]; // coil initial "phase" index
-	Nphi = sim->rfmap->z[iz*(sim->rfmap->Nch+1)+sim->rfmap->Nch]; // number of phi elements for current z position
-	//double steptimephi = sim->taur/Nphi;
-	iphi_shift = 0;
-	phitime = 0.0;
-	// NOTE: allow for Nphi == 1, i.e. no modulations in rfmap !!!
+	iphi_shift = 0; // index of rotor "phase", can run to infinity, periodicity assumed in rfmap_get()
+	steptimephi = duration*0.5;  // assuming duration = 2*steptimephi !!!
 
 	for (j=1; j<=Nelem; j++) { // main loop over all shape elements
-		// read rfmap coefficients for all channels
-		// modify rf shape parameters, including the middle point
-		// create the three Hrf hamiltonians
-		// create the three interaction Hamiltonians
-		// combine all into comples exponent
+		//printf("Calculating element %d\n",j);
+		// preparing LEFT Hamiltonian
+		for (chan=1; chan<=Nchan; chan++) {
+			if (mask[chan] == -1) { // no rf applied on this channel
+				_rf(wsp,chan,0.0);
+				_ph(wsp,chan,0.0);
+			} else {
+				rfmap_get(sim->rfmap,iz,iphi+iphi_shift,chan-1,&bx,&by); // get distortion coefs
+				am = RFshapes[mask[chan]][j].ampl;  // original ampl/phase element
+				ph = RFshapes[mask[chan]][j].phase;
+				am *= sqrt(bx*bx+by*by);  // modify rf parameters at this element
+				ph += RAD2DEG*atan2(by,bx);
+				_rf(wsp,chan,am);  // set them on
+				_ph(wsp,chan,ph);
+			}
+		}
+		local_setrfprop_complex(sim, wsp, Hleft); // creates complex RF Hamiltonian in Hleft
+		ham_hamilton(sim,wsp);  // creates interaction Hamiltonian in wsp->ham_blk
+		blk_cm_multocr(Hleft,wsp->ham_blk,Complx(1.0,0.0)); // add the two, this is final Hleft
+		wsp->t += steptimephi; // move time forward
+		iphi_shift++;         // move rotor forward
+		for (chan=1; chan<=Nchan; chan++) {
+			if (mask[chan] == -1) { // no rf applied on this channel
+				_rf(wsp,chan,0.0);
+				_ph(wsp,chan,0.0);
+			} else {
+				rfmap_get(sim->rfmap,iz,iphi+iphi_shift,chan-1,&bx,&by); // get distortion coefs
+				am = RFshapes[mask[chan]][j].ampl;  // original ampl/phase element
+				ph = RFshapes[mask[chan]][j].phase;
+				am *= sqrt(bx*bx+by*by);  // modify rf parameters at this element
+				ph += RAD2DEG*atan2(by,bx);
+				_rf(wsp,chan,am);  // set them on
+				_ph(wsp,chan,ph);
+			}
+		}
+		local_setrfprop_complex(sim, wsp, Hmiddle); // creates complex RF Hamiltonian in Hmiddle
+		ham_hamilton(sim,wsp);  // creates interaction Hamiltonian in wsp->ham_blk
+		blk_cm_multocr(Hmiddle,wsp->ham_blk,Complx(1.0,0.0)); // add the two, this is final Hmiddle
+		// preparing RIGHT Hamiltonian
+		wsp->t += steptimephi; // move time forward
+		iphi_shift++;         // move rotor forward
+		for (chan=1; chan<=Nchan; chan++) {
+			if (mask[chan] == -1) { // no rf applied on this channel
+				_rf(wsp,chan,0.0);
+				_ph(wsp,chan,0.0);
+			} else {
+				rfmap_get(sim->rfmap,iz,iphi+iphi_shift,chan-1,&bx,&by); // get distortion coefs
+				am = RFshapes[mask[chan]][j].ampl;  // original ampl/phase element
+				ph = RFshapes[mask[chan]][j].phase;
+				am *= sqrt(bx*bx+by*by);  // modify rf parameters at this element
+				ph += RAD2DEG*atan2(by,bx);
+				_rf(wsp,chan,am);  // set them on
+				_ph(wsp,chan,ph);
+			}
+		}
+		local_setrfprop_complex(sim, wsp, Hright); // creates complex RF Hamiltonian in Hright
+		ham_hamilton(sim,wsp);  // creates interaction Hamiltonian in wsp->ham_blk
+		blk_cm_multocr(Hright,wsp->ham_blk,Complx(1.0,0.0)); // add the two, this is final Hright
+		// combine all Hamiltonians into the complex exponent
+		blk_cm_zero(wsp->Hcplx);
+		cm_multoc(wsp->Hcplx->m, Hleft->m, Complx(1.0/6.0,0));
+		cm_multoc(wsp->Hcplx->m, Hmiddle->m, Complx(4.0/6.0,0));
+		cm_multoc(wsp->Hcplx->m, Hright->m, Complx(1.0/6.0,0));
+		cmat = cm_commutator(Hleft->m,Hright->m); // NOTE: cmat is aalocated here!!!
+		cm_multoc(wsp->Hcplx->m, cmat, Complx(0.0,1.0/12.0*dt));
 		// calculate propagator of rf element and update the total propagator
+		local_prop_complx(cmat,wsp->Hcplx->m,dt);
+		cm_multo_rev(wsp->dU->m,cmat);
+		free_complx_matrix(cmat); // NOTE: need to free this as it is not used anymore
+		/*** timing for the next shape element starts at RIGHT Hamiltonian, no adjustment necessary ***/
 	} // end of loop over shape elements
+	update_propagator(wsp->U, wsp->dU, sim, wsp);
+
+	// cleaning memory
+	free_blk_mat_complx(Hleft);
+	free_blk_mat_complx(Hmiddle);
+	free_blk_mat_complx(Hright);
 }
 int tclPulseShaped3PointRuleRFmap(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
 {
-	int i, j, slot, iz, Nphi, Nelem=-1, Nch=0, basis=0;
+	int i, slot, iz, Nphi, Nelem=-1, Nch=0, basis=0;
 	double duration, steptime, steptimephi;
 	int *mask, *OCchanmap = NULL;
 	Sim_info *sim = NULL;

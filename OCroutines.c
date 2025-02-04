@@ -117,7 +117,7 @@ void store_OCprop(Sim_wsp *wsp)
   int i = wsp->OC_mxpos;
   
   /* debug print */
-  /* printf("Storing OC propagator to slot %d\n",i); */
+  //printf("Storing OC propagator to slot %d\n",i);
    
   if (wsp->OC_props[i] != NULL) free_blk_mat_complx(wsp->OC_props[i]);
   wsp->OC_props[i] = blk_cm_dup(wsp->U);
@@ -468,7 +468,7 @@ void OC_commutator(mat_complx *cH,mat_complx *kom,int iter,mat_complx *cdum, dou
  */
 void _pulse_shapedOC_2_dnpframe(Sim_info *sim, Sim_wsp *wsp, int Nelem, int *OCchanmap, int *mask, double duration)
 {
-	int i, j, k, l, n;
+	int i, j, k, n;
 	double dt, dt_us;
 	int dim = wsp->ham_blk->dim;
 	int dim2 = dim*dim;
@@ -1445,6 +1445,418 @@ void _pulse_and_zgrad_shapedOCprops(Sim_info *sim, Sim_wsp *wsp, char *code, int
    wsp->inhom_offset = NULL;
 }
 
+/*****
+ * special purpose OC with 3-point rule propagation
+ * called from tclPulseShaped3PointRuleRFmap()
+ * Mostly copy-paste of _pulse_shapedOC_2,
+ * grads via expansion in nested commutators, assumes rfmap modulations,
+ * removed un-necessary options and tests, not fool-proofed!!
+ */
+extern void local_prop_complx(mat_complx *prop, mat_complx *ham, double dt); // defined in pulse.c
+void _pulse_shapedOC_3pointrulerfmap(Sim_info *sim, Sim_wsp *wsp, int Nelem, int *OCchanmap, int *mask, double duration)
+{
+	int j, k, chan, idxb;
+	double dt, am, ph, scl, steptimephi;
+	int dim = wsp->ham_blk->dim;
+	int dim2 = dim*dim;
+	int Nsh = LEN(OCchanmap);
+	mat_complx *kom = NULL, *cdum = NULL, *cdumptr;
+	mat_complx *Hleft, *Hmiddle, *Hright;
+	mat_complx *grxL, *gryL, *grxM, *gryM, *grxR, *gryR;
+	complx cscl;
+	// variables for rfmap
+	int iz = 0, iphi = 0, iphi_shift = 0;
+	double *bx, *by;
+	int Nchan = sim->ss->nchan;
+	// duration is steptime
+
+	assert(wsp->U != NULL);
+	assert(wsp->U->Nblocks == 1); /* no block_diag */
+	assert(sim->rfmap != NULL);  // rfmap is defined, no check for proper timings though
+
+	if (wsp->Uisunit != 1) {
+		/* there is some pending propagator, store it but make no gradient */
+		incr_OCmx_pos(wsp);
+		store_OCprop(wsp);
+		store_OCdens(sim,wsp); /* store sigma from previous step */
+		_evolve_with_prop(sim,wsp); /* get sigma ready for next store */
+		_reset_prop(sim,wsp);
+	}
+
+	int iter;
+	int maxiter = -1; /* exact gradients calculated via exponential */
+	double tol;
+	double maxtol = 1e-6;
+	if (fabs(OCpar.grad_level)<0.5) {
+		/* gradient with higher order corrections up to grad_level accuracy */
+		maxiter = 10;
+		maxtol = fabs(OCpar.grad_level);
+	} else if (OCpar.grad_level > 1.5){
+		/* gradient with higher order corrections up to grad_level order */
+		maxiter = (int)round(OCpar.grad_level);
+		maxtol = 1e-10;
+	}
+	if (maxiter<0) {
+		fprintf(stderr,"_pulse_shapedOC_3pointrulerfmap error: option for negative maxiter not implemented\n");
+		exit(1);
+	}
+	//printf("pulse_shaped_OC: maxiter = %d, tol = %g\n",maxiter,maxtol);
+
+	Hleft = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+	Hmiddle = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+	Hright = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+	bx = (double*)malloc(3*Nchan*sizeof(double));
+	by = (double*)malloc(3*Nchan*sizeof(double));
+	if ( (bx == NULL) || (by == NULL) ) {
+		fprintf(stderr,"_pulse_shapedOC_3pointrulerfmap error: bx/by allocation failed\n");
+		exit(1);
+	}
+	if (wsp->Hcplx == NULL) {
+		wsp->Hcplx = create_blk_mat_complx_copy2(wsp->ham_blk);
+	}
+	grxL = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+	gryL = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+	grxM = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+	gryM = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+	grxR = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+	gryR = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+
+	dt = duration*1.0e-6; // element duration in seconds
+	steptimephi = duration*0.5;  // assuming duration = 2*steptimephi !!!
+	iz = sim->rfmap->loop[(wsp->rf_idx)*2+0]; // z coil coordinate index
+	iphi = sim->rfmap->loop[(wsp->rf_idx)*2+1];  // coil initial "phase" index
+	iphi_shift = 0;
+
+	/* do pulsing, gradients, evolving, storing the results */
+	for (j=1; j<=Nelem; j++) {  // main loop over all shape elements
+		// preparing LEFT Hamiltonian
+		for (chan=1; chan<=Nchan; chan++) {
+			if (mask[chan] == -1) { // no rf applied on this channel
+				_rf(wsp,chan,0.0);
+				_ph(wsp,chan,0.0);
+			} else {
+				idxb = (chan-1)*3;
+				rfmap_get(sim->rfmap,iz,iphi+iphi_shift,chan-1,bx+idxb,by+idxb); // get distortion coefs
+				am = RFshapes[mask[chan]][j].ampl;  // original ampl/phase element
+				ph = RFshapes[mask[chan]][j].phase;
+				am *= sqrt(bx[idxb]*bx[idxb]+by[idxb]*by[idxb]);  // modify rf parameters at this element
+				ph += RAD2DEG*atan2(by[idxb],bx[idxb]);
+				_rf(wsp,chan,am);  // set them on
+				_ph(wsp,chan,ph);
+			}
+		}
+		ham_hamilton(sim, wsp); // creates interaction Hamiltonian in wsp->ham_blk
+		ham_hamrf_complex(Hleft, sim, wsp); // creates final Hleft (interactions and rf complex matrix
+			//printf("   ham left\n");
+		// preparing MIDDLE Hamiltonian
+		wsp->t += steptimephi; // move time forward
+		iphi_shift++;         // move rotor forward
+		for (chan=1; chan<=Nchan; chan++) {
+			if (mask[chan] == -1) { // no rf applied on this channel
+				_rf(wsp,chan,0.0);
+				_ph(wsp,chan,0.0);
+			} else {
+				idxb = (chan-1)*3+1;
+				rfmap_get(sim->rfmap,iz,iphi+iphi_shift,chan-1,bx+idxb,by+idxb); // get distortion coefs
+				am = RFshapes[mask[chan]][j].ampl;  // original ampl/phase element
+				ph = RFshapes[mask[chan]][j].phase;
+				am *= sqrt(bx[idxb]*bx[idxb]+by[idxb]*by[idxb]);  // modify rf parameters at this element
+				ph += RAD2DEG*atan2(by[idxb],bx[idxb]);
+				_rf(wsp,chan,am);  // set them on
+				_ph(wsp,chan,ph);
+			}
+		}
+		ham_hamilton(sim, wsp); // creates interaction Hamiltonian in wsp->ham_blk
+		ham_hamrf_complex(Hmiddle, sim, wsp); // creates final Hmiddle (interactions and rf complex matrix
+			//printf("   ham middle\n");
+		// preparing RIGHT Hamiltonian
+		wsp->t += steptimephi; // move time forward
+		iphi_shift++;         // move rotor forward
+		for (chan=1; chan<=Nchan; chan++) {
+			if (mask[chan] == -1) { // no rf applied on this channel
+				_rf(wsp,chan,0.0);
+				_ph(wsp,chan,0.0);
+			} else {
+				idxb = (chan-1)*3+2;
+				rfmap_get(sim->rfmap,iz,iphi+iphi_shift,chan-1,bx+idxb,by+idxb); // get distortion coefs
+				am = RFshapes[mask[chan]][j].ampl;  // original ampl/phase element
+				ph = RFshapes[mask[chan]][j].phase;
+				am *= sqrt(bx[idxb]*bx[idxb]+by[idxb]*by[idxb]);  // modify rf parameters at this element
+				ph += RAD2DEG*atan2(by[idxb],bx[idxb]);
+				_rf(wsp,chan,am);  // set them on
+				_ph(wsp,chan,ph);
+			}
+		}
+		ham_hamilton(sim, wsp); // creates interaction Hamiltonian in wsp->ham_blk
+		ham_hamrf_complex(Hright, sim, wsp); // creates final Hright (interactions and rf complex matrix
+			//printf("   ham right\n");
+		// combine all Hamiltonians into the complex exponent stored in wsp->Hcplx
+		blk_cm_zero(wsp->Hcplx);
+		cm_multoc(wsp->Hcplx->m, Hleft, Complx(1.0/6.0,0));
+		cm_multoc(wsp->Hcplx->m, Hmiddle, Complx(4.0/6.0,0));
+		cm_multoc(wsp->Hcplx->m, Hright, Complx(1.0/6.0,0));
+		cdum = cm_commutator(Hleft,Hright); // NOTE: cdum is allocated here!!!
+		cm_multoc(wsp->Hcplx->m, cdum, Complx(0.0,dt/12.0));
+		// calculate propagator of rf element into wsp->dU
+		local_prop_complx(wsp->U->m,wsp->Hcplx->m,dt); // this is STEP propagator
+		// prepare pointer where to store OC_deriv
+		incr_OCmx_pos(wsp);
+			//printf("   propagator\n");
+		for (k=1; k<=Nsh; k++) { /* loop over all gradshapes */
+			//printf("OCchanmap[%d] = %d\n",k,OCchanmap[k]);
+			if (OCchanmap[k] < 0) { /* this shape is not active, erase matrices if exist */
+				if (wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)] != NULL) {
+					free_complx_matrix(wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)]);
+					wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)] = NULL;
+					//printf("free and NULL (%d,%d)\n",wsp->OC_mxpos,2*(k-1));
+				}
+				if (wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)+1] != NULL) {
+					free_complx_matrix(wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)+1]);
+					wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)+1] = NULL;
+					//printf("free and NULL (%d,%d)\n",wsp->OC_mxpos,2*(k-1)+1);
+				}
+				continue;
+			}
+			// allocate matrices for active rf shapes
+			if (wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)] == NULL) {
+				wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)] = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+				//printf("alloc (%d,%d)\n",wsp->OC_mxpos,2*(k-1));
+			}
+			if (wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)+1] == NULL) {
+				wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)+1] = complx_matrix(dim,dim,MAT_DENSE,0,wsp->ham_blk->basis);
+				//printf("alloc (%d,%d)\n",wsp->OC_mxpos,2*(k-1)+1);
+			}
+			/* omega left x channel */
+			  // prepare operator connected with omega left x rf parameter
+			dm_copy2cm(wsp->chan_Ix[OCchanmap[k]], cdum); // cdum holds Ix
+			kom = cm_commutator(cdum, Hright); // NOTE: kom is allocated here!!
+			cm_multoc(cdum, kom, Complx(0,dt/2.0));
+			cm_muld(cdum, 1.0/6.0); // operator is complete now
+			cm_zero(grxL); // holds the gradient
+			cm_multoc(grxL, cdum, Complx(0,-1));  // first order gradient
+			cm_copy(kom, cdum); // kom holds the operator
+			iter=1;
+			tol = 1000;
+			scl = dt/2.0;
+			while (iter < maxiter && tol > maxtol) {
+				OC_commutator(wsp->Hcplx->m,kom,iter,cdum, &tol); // kom is updated and tol is calculated
+				switch (iter % 4) {
+					case 0: cscl.re = 0; cscl.im = -scl;
+						break;
+					case 1: cscl.re = scl; cscl.im = 0;
+						break;
+					case 2: cscl.re = 0; cscl.im = scl;
+						break;
+					case 3: cscl.re = -scl; cscl.im = 0;
+						break;
+				}
+				cblas_zaxpy(dim2,&cscl, kom->data,1,grxL->data,1);
+				tol *= scl;
+				scl *= (dt/((double)(iter)+2.0));
+				iter++;
+			}
+			cm_multo_rev(grxL,wsp->U->m); // gr is done here (= prop*"commutator series")
+			free_complx_matrix(kom);
+				//printf("   --> omega left x, chan %d\n",OCchanmap[k]);
+			/* omega left y channel */
+			  // prepare operator connected with omega left x rf parameter
+			dm_copy2cm_imag(wsp->chan_Iy[OCchanmap[k]], cdum); // cdum holds Iy
+			kom = cm_commutator(cdum, Hright); // NOTE: kom is allocated here!!
+			cm_multoc(cdum, kom, Complx(0,dt/2.0));
+			cm_muld(cdum, 1.0/6.0); // operator is complete now
+			cm_zero(gryL);  // holds the gradient
+			cm_multoc(gryL, cdum, Complx(0,-1));  // first order gradient
+			cm_copy(kom, cdum); // kom holds the operator
+			iter=1;
+			tol = 1000;
+			scl = dt/2.0;
+			while (iter < maxiter && tol > maxtol) {
+				OC_commutator(wsp->Hcplx->m,kom,iter,cdum, &tol); // kom is updated and tol is calculated
+				switch (iter % 4) {
+					case 0: cscl.re = 0; cscl.im = -scl;
+						break;
+					case 1: cscl.re = scl; cscl.im = 0;
+						break;
+					case 2: cscl.re = 0; cscl.im = scl;
+						break;
+					case 3: cscl.re = -scl; cscl.im = 0;
+						break;
+				}
+				cblas_zaxpy(dim2,&cscl, kom->data,1,gryL->data,1);
+				tol *= scl;
+				scl *= (dt/((double)(iter)+2.0));
+				iter++;
+			}
+			cm_multo_rev(gryL,wsp->U->m); // gr is done here (= prop*"commutator series")
+			free_complx_matrix(kom);
+				//printf("   --> omega left y\n");
+			/* omega MIDDLE x channel */
+			  // prepare operator connected with omega left x rf parameter
+			dm_copy2cm(wsp->chan_Ix[OCchanmap[k]], cdum); // cdum holds Ix
+			cm_muld(cdum, 4.0/6.0); // operator is complete now
+			cm_zero(grxM); // holds the gradient
+			cm_multoc(grxM, cdum, Complx(0,-1));  // first order gradient
+			kom = cm_dup(cdum); // kom allocated, holds the operator
+			iter=1;
+			tol = 1000;
+			scl = dt/2.0;
+			while (iter < maxiter && tol > maxtol) {
+				OC_commutator(wsp->Hcplx->m,kom,iter,cdum, &tol); // kom is updated and tol is calculated
+				switch (iter % 4) {
+					case 0: cscl.re = 0; cscl.im = -scl;
+						break;
+					case 1: cscl.re = scl; cscl.im = 0;
+						break;
+					case 2: cscl.re = 0; cscl.im = scl;
+						break;
+					case 3: cscl.re = -scl; cscl.im = 0;
+						break;
+				}
+				cblas_zaxpy(dim2,&cscl, kom->data,1,grxM->data,1);
+				tol *= scl;
+				scl *= (dt/((double)(iter)+2.0));
+				iter++;
+			}
+			cm_multo_rev(grxM,wsp->U->m); // gr is done here (= prop*"commutator series")
+			free_complx_matrix(kom);
+				//printf("   --> omega middle x\n");
+			/* omega MIDDLE y channel */
+			  // prepare operator connected with omega left x rf parameter
+			dm_copy2cm_imag(wsp->chan_Iy[OCchanmap[k]], cdum); // cdum holds Iy
+			cm_muld(cdum, 4.0/6.0); // operator is complete now
+			cm_zero(gryM);  // holds the gradient
+			cm_multoc(gryM, cdum, Complx(0,-1));  // first order gradient
+			kom = cm_dup(cdum); // kom allocated, holds the operator
+			iter=1;
+			tol = 1000;
+			scl = dt/2.0;
+			while (iter < maxiter && tol > maxtol) {
+				OC_commutator(wsp->Hcplx->m,kom,iter,cdum, &tol); // kom is updated and tol is calculated
+				switch (iter % 4) {
+					case 0: cscl.re = 0; cscl.im = -scl;
+						break;
+					case 1: cscl.re = scl; cscl.im = 0;
+						break;
+					case 2: cscl.re = 0; cscl.im = scl;
+						break;
+					case 3: cscl.re = -scl; cscl.im = 0;
+						break;
+				}
+				cblas_zaxpy(dim2,&cscl, kom->data,1,gryM->data,1);
+				tol *= scl;
+				scl *= (dt/((double)(iter)+2.0));
+				iter++;
+			}
+			cm_multo_rev(gryM,wsp->U->m); // gr is done here (= prop*"commutator series")
+			free_complx_matrix(kom);
+				//printf("   --> omega middle y\n");
+			/* omega RIGHT x channel */
+			  // prepare operator connected with omega left x rf parameter
+			dm_copy2cm(wsp->chan_Ix[OCchanmap[k]], cdum); // cdum holds Ix
+			kom = cm_commutator(Hleft, cdum); // NOTE: kom is allocated here!!
+			cm_multoc(cdum, kom, Complx(0,dt/2.0));
+			cm_muld(cdum, 1.0/6.0); // operator is complete now
+			cm_zero(grxR); // holds the gradient
+			cm_multoc(grxR, cdum, Complx(0,-1));  // first order gradient
+			cm_copy(kom, cdum); // kom holds the operator
+			iter=1;
+			tol = 1000;
+			scl = dt/2.0;
+			while (iter < maxiter && tol > maxtol) {
+				OC_commutator(wsp->Hcplx->m,kom,iter,cdum, &tol); // kom is updated and tol is calculated
+				switch (iter % 4) {
+					case 0: cscl.re = 0; cscl.im = -scl;
+						break;
+					case 1: cscl.re = scl; cscl.im = 0;
+						break;
+					case 2: cscl.re = 0; cscl.im = scl;
+						break;
+					case 3: cscl.re = -scl; cscl.im = 0;
+						break;
+				}
+				cblas_zaxpy(dim2,&cscl, kom->data,1,grxR->data,1);
+				tol *= scl;
+				scl *= (dt/((double)(iter)+2.0));
+				iter++;
+			}
+			cm_multo_rev(grxR,wsp->U->m); // gr is done here (= prop*"commutator series")
+			free_complx_matrix(kom);
+				//printf("   --> omega right x\n");
+			/* omega RIGHT y channel */
+			  // prepare operator connected with omega left x rf parameter
+			dm_copy2cm_imag(wsp->chan_Iy[OCchanmap[k]], cdum); // cdum holds Iy
+			kom = cm_commutator(Hleft, cdum); // NOTE: kom is allocated here!!
+			cm_multoc(cdum, kom, Complx(0,dt/2.0));
+			cm_muld(cdum, 1.0/6.0); // operator is complete now
+			cm_zero(gryR);  // holds the gradient
+			cm_multoc(gryR, cdum, Complx(0,-1));  // first order gradient
+			cm_copy(kom, cdum); // kom holds the operator
+			iter=1;
+			tol = 1000;
+			scl = dt/2.0;
+			while (iter < maxiter && tol > maxtol) {
+				OC_commutator(wsp->Hcplx->m,kom,iter,cdum, &tol); // kom is updated and tol is calculated
+				switch (iter % 4) {
+					case 0: cscl.re = 0; cscl.im = -scl;
+						break;
+					case 1: cscl.re = scl; cscl.im = 0;
+						break;
+					case 2: cscl.re = 0; cscl.im = scl;
+						break;
+					case 3: cscl.re = -scl; cscl.im = 0;
+						break;
+				}
+				cblas_zaxpy(dim2,&cscl, kom->data,1,gryR->data,1);
+				tol *= scl;
+				scl *= (dt/((double)(iter)+2.0));
+				iter++;
+			}
+			cm_multo_rev(gryR,wsp->U->m); // gr is done here (= prop*"commutator series")
+			free_complx_matrix(kom);
+				//printf("   --> omega right y\n");
+			// assemble TOTAL x gradient
+			  // will use cdumptr as a pointer to OC_deriv
+			cdumptr = wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)];
+			//printf("  = total grad x start\n");
+			cm_zero(cdumptr);
+			cm_multod(cdumptr, grxL, bx[(OCchanmap[k]-1)*3]);
+			cm_multod(cdumptr, gryL, by[(OCchanmap[k]-1)*3]);
+			cm_multod(cdumptr, grxM, bx[(OCchanmap[k]-1)*3+1]);
+			cm_multod(cdumptr, gryM, by[(OCchanmap[k]-1)*3+1]);
+			cm_multod(cdumptr, grxR, bx[(OCchanmap[k]-1)*3+2]);
+			cm_multod(cdumptr, gryR, by[(OCchanmap[k]-1)*3+2]);
+			// assemble TOTAL y gradient
+			cdumptr = wsp->OC_deriv[wsp->OC_mxpos][2*(k-1)+1];
+			//printf("  = total grad y start\n");
+			cm_zero(cdumptr);
+			cm_multod(cdumptr, grxL, -by[(OCchanmap[k]-1)*3]);
+			cm_multod(cdumptr, gryL, bx[(OCchanmap[k]-1)*3]);
+			cm_multod(cdumptr, grxM, -by[(OCchanmap[k]-1)*3+1]);
+			cm_multod(cdumptr, gryM, bx[(OCchanmap[k]-1)*3+1]);
+			cm_multod(cdumptr, grxR, -by[(OCchanmap[k]-1)*3+2]);
+			cm_multod(cdumptr, gryR, bx[(OCchanmap[k]-1)*3+2]);
+			//printf("  = total grad done\n");
+		}/* loop over all gradshapes */
+		free_complx_matrix(cdum); // cdum gets allocated for each shape element
+		store_OCprop(wsp);
+		store_OCdens(sim,wsp); /* sigma of previous step */
+		_evolve_with_prop(sim,wsp); /* get sigma ready for the next step */
+		_reset_prop(sim,wsp);
+	} /* end for j over Nelem */
+
+	// cleaning memory allocations!!!
+	free_complx_matrix(Hleft);
+	free_complx_matrix(Hright);
+	free_complx_matrix(Hmiddle);
+	free_complx_matrix(grxL);
+	free_complx_matrix(gryL);
+	free_complx_matrix(grxM);
+	free_complx_matrix(gryM);
+	free_complx_matrix(grxR);
+	free_complx_matrix(gryR);
+	free((char*)bx);
+	free((char*)by);
+}
 
 
 /****

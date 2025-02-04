@@ -3989,6 +3989,7 @@ void _pulse_shaped_3pointrulerfmap(Sim_info *sim, Sim_wsp *wsp, int Nelem, int *
 		local_setrfprop_complex(sim, wsp, Hleft); // creates complex RF Hamiltonian in Hleft
 		ham_hamilton(sim,wsp);  // creates interaction Hamiltonian in wsp->ham_blk
 		blk_cm_multocr(Hleft,wsp->ham_blk,Complx(1.0,0.0)); // add the two, this is final Hleft
+		// preparing MIDDLE Hamiltonian
 		wsp->t += steptimephi; // move time forward
 		iphi_shift++;         // move rotor forward
 		for (chan=1; chan<=Nchan; chan++) {
@@ -4050,7 +4051,7 @@ void _pulse_shaped_3pointrulerfmap(Sim_info *sim, Sim_wsp *wsp, int Nelem, int *
 }
 int tclPulseShaped3PointRuleRFmap(ClientData data,Tcl_Interp* interp,int argc, Tcl_Obj *argv[])
 {
-	int i, slot, iz, Nphi, Nelem=-1, Nch=0, basis=0;
+	int i, j, slot, iz, Nphi, Nelem=-1, Nch=0, basis=0;
 	double duration, steptime, steptimephi;
 	int *mask, *OCchanmap = NULL;
 	Sim_info *sim = NULL;
@@ -4144,9 +4145,43 @@ int tclPulseShaped3PointRuleRFmap(ClientData data,Tcl_Interp* interp,int argc, T
 		}
 	}
 
-
 	if (OCpar.gradmode) {
-		return TclError(interp,"%s: not yet supported in combination with OC", cmdname);
+		if (!OCpar.grad_shapes) {
+			return TclError(interp,"%s: error when calculating propagators for gradients: grad_shapes not defined", cmdname);
+		}
+		if (fabs(OCpar.grad_level-1)<1e-3) { /* original GRAPE ala Khaneja */
+			return TclError(interp,"%s: original GRAPE ala Khaneja not implemented", cmdname);
+		} else { /* GRAPE with advanced gradients */
+			int Nsh=LEN(OCpar.grad_shapes);
+			OCchanmap = int_vector(Nsh);
+			for (i=1; i<=Nsh; i++) { // assign rfshapes their respective rf channels
+				OCchanmap[i] = -1;
+				//printf("grad_shapes[%d] = %d \n",i,OCpar.grad_shapes[i]);
+				for (j=1; j<=sim->ss->nchan; j++) {
+					//printf("\t mask[%d] = %d \n",j,mask[j]);
+					if (OCpar.grad_shapes[i] == mask[j]) {
+						OCchanmap[i] = j;
+						Nch++;
+						break;
+					}
+				}
+				//printf("\t OCchanmap[%d] = %d \n",i,OCchanmap[i]);
+			}
+			if (Nch == 0) {  // no rf shape to take gradients
+				_pulse_shaped_3pointrulerfmap(sim, wsp, Nelem, mask, steptime); // propagate with distorted shapes
+			} else {  // lets do gradients
+				if ( OCpar.gradmodeprop == 1 ) {
+					/* do stuff for propagator optimization */
+					return TclError(interp,"%s: does not support OC of propagators\n",cmdname);
+					//_pulse_shapedOCprops_2(sim,wsp,Nelem,OCchanmap,mask2,steptime); // propagate with distorted shapes
+				} else {
+					/* do stuff for state to state optimization */
+					//return TclError(interp,"%s: not yet supported in combination with OC", cmdname);
+					_pulse_shapedOC_3pointrulerfmap(sim,wsp,Nelem,OCchanmap,mask,steptime);
+				}
+			}
+			free_int_vector(OCchanmap);
+		}
 	} else {
 		/* do just actual pulsing */
 		_pulse_shaped_3pointrulerfmap(sim, wsp, Nelem, mask, steptime);

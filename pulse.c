@@ -3581,7 +3581,7 @@ void _pulse_simple_3pointruleconstantrf(Sim_info *sim, Sim_wsp *wsp, double dura
 	/* this assumes that wsp->sumHrf and wsp->sumUph are already made */
 	int i, n;
 	double dt, dt_us;
-	blk_mat_double *Hleft, *Hmiddle, *Hright, *Htemp;
+	blk_mat_double *Hleft, *Hmiddle, *Hright, *Htemp, *temp_ham_blk;
 
 	// initialization and allocation
 	assert(wsp->dU != NULL);
@@ -3603,14 +3603,14 @@ void _pulse_simple_3pointruleconstantrf(Sim_info *sim, Sim_wsp *wsp, double dura
 	dt = dt_us*1.0e-6;
 	//printf("_pulse_simple_3pointruleconstantrf duration of %f us split into %d steps of %f us\n",duration,n,dt*1.0e+6);
 	// create LEFT hamiltonian
-	Htemp = wsp->ham_blk;
+	temp_ham_blk = wsp->ham_blk;
 	wsp->ham_blk = Hleft;
 	ham_hamilton(sim,wsp);
 	blk_dm_multod(Hleft,wsp->sumHrf,1.0);
 	for (i=1;i<=n;i++) {
 		// create MIDDLE hamiltonian
 		wsp->t += dt_us/2.0;
-		Htemp = wsp->ham_blk;
+		//Htemp = wsp->ham_blk;
 		wsp->ham_blk = Hmiddle;
 		ham_hamilton(sim,wsp);
 		blk_dm_multod(Hmiddle,wsp->sumHrf,1.0);
@@ -3639,13 +3639,15 @@ void _pulse_simple_3pointruleconstantrf(Sim_info *sim, Sim_wsp *wsp, double dura
 		//printf("time step is %g\n",dt);
 		//exit(1);
 		// swap Hleft and Hright
-		wsp->ham_blk = Htemp;
+		//wsp->ham_blk = Htemp;
 		Htemp = Hleft;
 		Hleft = Hright;
 		Hright = Htemp;
 	}
 	// add phase of the pulse element
 	blk_simtrans_zrot2(wsp->dU,wsp->sumUph);
+	// put ham_blk back
+	wsp->ham_blk = temp_ham_blk;
 	// cleaning memory
 	free_blk_mat_double(Hleft);
 	free_blk_mat_double(Hmiddle);

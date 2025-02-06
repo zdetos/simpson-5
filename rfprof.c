@@ -183,7 +183,7 @@ double rfprof_sumweight(double **rfdata)
 	return w;
 }
 
-rfmap_struct* read_rfmap(const char* name,int nchan)
+rfmap_struct* read_rfmap(const char* name,int nchan, int avestep)
 {
   FILE* fp;
   char fname[256];
@@ -191,6 +191,8 @@ rfmap_struct* read_rfmap(const char* name,int nchan)
   int ver;
   double dum, bx, by;
   rfmap_struct *rfmap;
+  //int avestep = 2; // this will be input parameter
+  //printf("rfmap reading: avestep = %d\n",avestep);
 
   ver= verbose & VERBOSE_RFPROF;
   strcpy(fname,name);
@@ -265,8 +267,14 @@ rfmap_struct* read_rfmap(const char* name,int nchan)
 		  fprintf(stderr,"error: rfmap crashed when reading Nphi from line %d\n",iz+1);
 		  exit(1);
 	  }
-	  for (iphi=0; iphi<Nphi; iphi++) {
-		  rfmap->weight[iloop] = dum/Nphi;
+	  //for (iphi=0; iphi<Nphi; iphi++) {
+	  if ( (Nphi > 1) && (Nphi % avestep != 0) ) {
+		  fprintf(stderr,"error reading rfmap: number of phi elements (%d) is not multiple of avesteps (%d)\n",Nphi, avestep);
+		  exit(1);
+	  }
+	  for (iphi=0; iphi<Nphi; iphi += avestep) {
+		  //rfmap->weight[iloop] = dum/Nphi;
+		  rfmap->weight[iloop] = dum/Nphi*(Nphi>1 ? avestep:1);
 		  rfmap->loop[iloop*2+0] = iz;
 		  rfmap->loop[iloop*2+1] = iphi;
 		  iloop++;
@@ -286,9 +294,11 @@ rfmap_struct* read_rfmap(const char* name,int nchan)
  	  }
   }
   fclose(fp);
+  rfmap->loop_size = iloop; // correct the size of loop (relevant entries)
 
-  // control printout
-/*  printf("rfmap->z\n");
+  /*** control printout
+  printf("rfmap: iloop=%d, ib1=%d\n",iloop,ib1);
+  printf("rfmap->z\n");
   for (iz=0; iz<Nz; iz++) {
 	  for (ich=0; ich<=Nch; ich++) {
 		  printf(" %3d",rfmap->z[iz*(Nch+1)+ich]);
@@ -299,27 +309,35 @@ rfmap_struct* read_rfmap(const char* name,int nchan)
   for (iloop=0; iloop<Ntot; iloop++) {
 	  printf("%3d %3d %g\n",rfmap->loop[iloop*2+0],rfmap->loop[iloop*2+1],rfmap->weight[iloop]);
   }
-  printf("rfmap->b1\n");
-  for (iloop=0; iloop<Ntot; iloop++) {
+  printf("Averaging points in rfmap->b1 \n");
+  for (iloop=0; iloop<rfmap->loop_size; iloop++) {
 	  iz = rfmap->loop[iloop*2+0];
 	  iphi = rfmap->loop[iloop*2+1];
-	  printf("%d %d ",iz,iphi);
-	  for (ich=0; ich<Nch; ich++) {
-		  ib1 = (rfmap->z[iz*(Nch+1)+ich]+iphi)*2;
-		  printf("%d) %g %g\n",iloop,rfmap->b1[ib1], rfmap->b1[ib1+1]);
-	  }
-  }
-  printf("rfmap->b1 again\n");
-  for (iloop=0; iloop<Ntot; iloop++) {
-	  iz = rfmap->loop[iloop*2+0];
-	  iphi = rfmap->loop[iloop*2+1];
-	  printf("%d %d ",iz,iphi);
+	  printf("%d) %d %d ",iloop,iz,iphi);
 	  for (ich=0; ich<Nch; ich++) {
 		  rfmap_get(rfmap,iz,iphi,ich,&bx,&by);
-		  printf("%d) %g %g\n",iloop, bx, by);
+		  printf("ch %d (%g %g) ",ich, bx, by);
 	  }
+	  printf("\n");
   }
-*/
+  printf("rfmap->b1\n");
+  for (ib1=0; ib1<Ntot*Nch; ib1++) {
+	  printf("%d) %g %g\n",ib1*2,rfmap->b1[ib1*2+0],rfmap->b1[ib1*2+1]);
+  }
+  printf("rfmap->b1 again and again\n");
+  for (iz=0; iz<Nz; iz++) {
+	  Nphi = rfmap->z[iz*(Nch+1)+Nch];
+	  printf("Row (%d)",iz+1);
+	  for (ich=0; ich<Nch; ich++) {
+		  printf("\n chan %d (%d): ",ich+1,Nphi);
+		  for (iphi=0; iphi<Nphi; iphi++) {
+			  rfmap_get(rfmap,iz,iphi,ich,&bx,&by);
+			  printf("(%g %g / %d %d) ",bx,by,rfmap->z[iz*(Nch+1)+ich],(rfmap->z[iz*(Nch+1)+ich]+iphi)*2);
+		  }
+	  }
+	  printf("\n");
+  }
+  ***/
 
   return rfmap;
 }

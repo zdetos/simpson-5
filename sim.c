@@ -360,11 +360,44 @@ Sim_info * sim_initialize(Tcl_Interp* interp)
   }
 
   TclGetString(interp,s->rfproffile,"par","rfprof_file",0,"none");
-  TclGetString(interp,s->rfmapfile,"par","rfmap",0,"none");
+  //TclGetString(interp,s->rfmapfile,"par","rfmap",0,"none");
+  obj = Tcl_GetVar2Ex(interp,"par","rfmap",0);
+  int rfmap_avestep = 1; // default value, averaging over all iphi elements in rfmap
+  if (obj == NULL) {
+	  strcpy(s->rfmapfile,"none"); // rfmap does not exist
+  } else { // decompose as TCL list
+	  if (Tcl_ListObjGetElements(interp,obj,&objc,&objv) != TCL_OK) {
+		  fprintf(stderr,"Error: problem reading rfmap definition in par:\n%s\n",Tcl_GetStringResult(interp));
+		  exit(1);
+	  }
+	  switch (objc) {
+	  case 1:
+		  strcpy(s->rfmapfile,Tcl_GetString(objv[0]));
+		  break;
+	  case 2:
+		  strcpy(s->rfmapfile,Tcl_GetString(objv[0]));
+		  if (Tcl_GetIntFromObj(interp,objv[1],&rfmap_avestep) != TCL_OK) {
+			  fprintf(stderr,"Error: problem reading rfmap definition in par (averaging step):\n%s\n",Tcl_GetStringResult(interp));
+			  exit(1);
+		  }
+		  if (rfmap_avestep < 1) {
+			  fprintf(stderr,"Error: par(rfmap) - averaging step must be >= 1 but is %d\n",rfmap_avestep);
+			  exit(1);
+		  }
+		  break;
+	  default:
+		  fprintf(stderr,"Error reading par(rfmap) : wrong number of arguments, expecting 1 or 2, got %d\n",objc);
+		  exit(1);
+	  }
+  }
   if ( (strcmp(s->rfproffile,"none") != 0) && (strcmp(s->rfmapfile,"none") != 0) ) {
 	  fprintf(stderr,"Error: rfprof_file and rfmap can not be defined simultaneously\n");
 	  exit(1);
   }
+
+
+
+
   TclGetString(interp,pulseq,"par","pulse_sequence",0,"pulseq");
   strcpy(s->pulsename, pulseq);
 
@@ -603,7 +636,8 @@ Sim_info * sim_initialize(Tcl_Interp* interp)
   //if (s->imethod == M_SPINACH) s->conjugate_fid = !(s->conjugate_fid);
 
   s->rfdata = read_rfproffile(s->rfproffile,s->ss->nchan);
-  s->rfmap = read_rfmap(s->rfmapfile,s->ss->nchan);
+  //s->rfmap = read_rfmap(s->rfmapfile,s->ss->nchan);
+  s->rfmap = read_rfmap(s->rfmapfile,s->ss->nchan, rfmap_avestep); // upgraded version allows to skip some iphi values
 
   s->tridata = NULL;
   s->ASG_freq = NULL;

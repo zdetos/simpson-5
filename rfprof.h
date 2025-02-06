@@ -19,7 +19,8 @@ void rfprof_free(double ** obj);
 double ** read_rfproffile(const char * fname, int chan);
 int rfprof_len(double ** obj);
 double rfprof_sumweight(double **rfdata);
-rfmap_struct* read_rfmap(const char *fname, int chan);
+//rfmap_struct* read_rfmap(const char *fname, int chan);
+rfmap_struct* read_rfmap(const char *fname, int chan, int avestep); //updated version allows to skip some iphi values
 void rfmap_free(rfmap_struct *rfmap);
 void rfmap_get(rfmap_struct *rfmap, int iz, int iphi, int ich, double *bx, double *by);
 

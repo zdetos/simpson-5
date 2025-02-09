@@ -1599,6 +1599,7 @@ void _pulse_shapedOC_3pointrulerfmap(Sim_info *sim, Sim_wsp *wsp, int Nelem, int
 		cm_multoc(wsp->Hcplx->m, cdum, Complx(0.0,dt/12.0));
 		// calculate propagator of rf element into wsp->dU
 		local_prop_complx(wsp->U->m,wsp->Hcplx->m,dt); // this is STEP propagator
+		wsp->Uisunit = 0;
 		// prepare pointer where to store OC_deriv
 		incr_OCmx_pos(wsp);
 			//printf("   propagator\n");
@@ -2058,6 +2059,7 @@ void gradOC_hermit_2(Sim_info *sim, Sim_wsp *wsp)
   for ( i=0; i<NN; i++) {
 	  complx c = cm_trace(wsp->sigma[i % sim->Nfstart],wsp->fdetect[i % sim->Nfdetect]);
 	  wsp->OC_phivals[i+1].re += c.re;
+	  //cm_print(wsp->sigma[i % sim->Nfstart],"sigma");
 	  //printf("\t--> oc_acq_hermit form grad: %.4f\n",c.re);
   }
 

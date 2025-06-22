@@ -34,5 +34,6 @@ void OCpar_destroy(void);
 void test_print_codes(Sim_wsp *wsp);
 void _pulse_shapedOC_2_dnpframe(Sim_info *sim, Sim_wsp *wsp, int Nelem, int *OCchanmap, int *mask, double duration);
 void _pulse_shapedOC_3pointrulerfmap(Sim_info *sim, Sim_wsp *wsp, int Nelem, int *OCchanmap, int *mask, double duration);
+void _pulse_shapedOC_piecewiselinear_rfmap(Sim_info *sim, Sim_wsp *wsp, int Nelem, int *OCchanmap, int *mask, double duration);
 
 #endif

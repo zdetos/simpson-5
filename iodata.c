@@ -1729,9 +1729,7 @@ double getpipeval(char *fname, char *flag, int dim)
   from F. Delaglio.
 ************************************************/
 
-int testHdr( fdata )
-
-   float  fdata[FDATASIZE];
+int testHdr( float  fdata[FDATASIZE] )
 {
     int   status;
 
@@ -1765,9 +1763,7 @@ int testHdr( fdata )
     return( status );
 }
 
-int swapHdr( fdata )
-
-   float fdata[FDATASIZE];
+int swapHdr( float fdata[FDATASIZE] )
 {
     int   i;
     union fsw { float f; char s[4]; } in, out;
@@ -1790,9 +1786,7 @@ int swapHdr( fdata )
     return( 0 );
 }
 
-int isNullHdr( fdata )
-
-   float *fdata;
+int isNullHdr( float *fdata )
 {
     int i, count;
 
@@ -1807,9 +1801,7 @@ int isNullHdr( fdata )
 
 
 #define FLTSIZE 4
-int isHdrStr( parmLoc )
-
-   int parmLoc;
+int isHdrStr( int parmLoc )
 {
     if (parmLoc >= FDF2LABEL &&
           parmLoc < FDF2LABEL + SIZE_NDLABEL/FLTSIZE) return( 1 );

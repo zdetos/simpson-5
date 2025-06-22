@@ -701,11 +701,11 @@ char  *getParmStr();  /* Gets header text by parm and dimension code.        */
 
 int is90_180();       /* Test if dimension is unextracted PS(-90,180).       */
 int isInterleaved();  /* Tests if dimension is interleaved quad.             */
-int isHdrStr();       /* Tests if an FDATA location is inside a string.      */
+int isHdrStr(int parmLoc);       /* Tests if an FDATA location is inside a string.      */
 int isHdrStr0();      /* Tests if an FDATA location begins a string.         */
 
-int testHdr();        /* Tests for valid file header.                        */
-int swapHdr();        /* Perform byte-swaping of appropriate header values.  */
+int testHdr(float  fdata[FDATASIZE]);        /* Tests for valid file header.                        */
+int swapHdr(float fdata[FDATASIZE]);        /* Perform byte-swaping of appropriate header values.  */
 int copyHdr();        /* Utility to copy header contents.                    */
 
 /***

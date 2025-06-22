@@ -164,7 +164,7 @@ typedef struct _Sim_info {
 #define ACQBLOCK_STO_INI 1001
 #define ACQBLOCK_STO_END 15000
 #define MAXOCPROPS 16384
-#define MAXOCSHAPES 4
+#define MAXOCSHAPES 6
 
 /* all times are stored in microseconds */
 typedef struct _Sim_wsp {

@@ -1189,7 +1189,7 @@ void ham_hamilton(Sim_info *sim, Sim_wsp *wsp)
 void integ(complx* R,double t1,double t2,double wr)
 {
    double wrm;
-
+//printf("in integ: wr is %.10f\n",wr);
    wrm= wr * (-2.0); R[1] = Cmul(Complx(0,1.0/wrm),Csub(Cexpi(-t2*wrm),Cexpi(-t1*wrm)));
    wrm= wr * (-1.0); R[2] = Cmul(Complx(0,1.0/wrm),Csub(Cexpi(-t2*wrm),Cexpi(-t1*wrm)));
                      R[3] = Complx(t2-t1,0);
@@ -1456,6 +1456,7 @@ void ham_hamilton_integrate(Sim_info *s, Sim_wsp *wsp, double dur)
 			if (!wsp->CS_used[i] || wsp->CS_Rrot[i] == NULL) continue;
 			cdw = Cnull;
 			for (j=1; j<6; j++) {
+				printf("CS[%d]: (%d) [%.4g, %.4g], [%.4g, %.4g], [%.4g, %.4g]\n",i,j,wsp->CS_Rrot[i][j].re,wsp->CS_Rrot[i][j].im,d20[j].re,d20[j].im,R[j].re,R[j].im);
 				cdw = Cadd(cdw,Cmul(Cmul(wsp->CS_Rrot[i][j],d20[j]),R[j]));
 			}
 			assert(fabs(cdw.im) < TINY);

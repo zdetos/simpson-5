@@ -4956,7 +4956,7 @@ void prop_pade_real(mat_complx *prop, mat_double *ham, double dt)
 	norm = dm_normest(ham)*dt; // NOTE: here 1-norm must be used!!!
 	// I use infinity-norm since it is easier to code for sparse matrices
 	// ham is real symmetric and therefore the result is identical
-	printf("prop_pade_real norm = %f\n",norm);
+	//printf("prop_pade_real norm = %f\n",norm);
 	if (norm < 1.495585217958292e-2) {
 		//m = 3;
 		U = dm_creatediag('d',dim,b[1],ham->basis);
@@ -5024,7 +5024,7 @@ void prop_pade_real(mat_complx *prop, mat_double *ham, double dt)
 			nsq = (int)ceil(log(norm/5.371920351148152)/log(2.0));
 			scl = pow(2,nsq);
 		}
-		printf("prop_pade_real nsq = %d, scl = %f\n",nsq,scl);
+		//printf("prop_pade_real nsq = %d, scl = %f\n",nsq,scl);
 		dm_muld(ham, dt/scl);
 		mat_double *H2 = dm_mul(ham, ham);
 		mat_double *H4 = dm_mul(H2, H2);
